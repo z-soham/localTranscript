@@ -20,6 +20,7 @@ from src.settings_manager import load_settings, save_settings
 from src.summarizer import summarize_transcript
 from src.transcriber import transcribe_file
 from src.utils import seconds_to_human
+from src.youtube import YT_DLP_AVAILABLE, download_youtube_audio
 
 
 class TranscriptApp:
@@ -44,6 +45,7 @@ class TranscriptApp:
 
         # Transcription-tab state
         self.file_path_var = tk.StringVar()
+        self.youtube_url_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
         self.progress_text_var = tk.StringVar(value="No active transcription")
 
@@ -93,6 +95,8 @@ class TranscriptApp:
         from src.transcriber import WhisperModel
         if WhisperModel is None:
             self._log("faster-whisper not installed — run: pip install faster-whisper")
+        if not YT_DLP_AVAILABLE:
+            self._log("yt-dlp not installed — YouTube URL input disabled. Run: pip install yt-dlp")
 
     # ------------------------------------------------------------------
     # Tab 1 — Transcription
@@ -107,7 +111,7 @@ class TranscriptApp:
         # --- Input ---
         file_frame = ttk.LabelFrame(tab, text="Input", padding=12)
         file_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        file_frame.columnconfigure(0, weight=1)
+        file_frame.columnconfigure(1, weight=1)
 
         self.drop_zone = tk.Label(
             file_frame,
@@ -121,15 +125,23 @@ class TranscriptApp:
             font=("Segoe UI", 11),
             justify="center",
         )
-        self.drop_zone.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        self.drop_zone.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
 
         if DND_AVAILABLE:
             self.drop_zone.drop_target_register(DND_FILES)
             self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)
 
-        ttk.Entry(file_frame, textvariable=self.file_path_var).grid(row=1, column=0, sticky="ew", padx=(0, 8))
-        ttk.Button(file_frame, text="Browse Media", command=self.browse_file).grid(row=1, column=1, padx=(0, 8))
-        ttk.Button(file_frame, text="Clear", command=self.clear_file).grid(row=1, column=2)
+        ttk.Entry(file_frame, textvariable=self.file_path_var).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 8))
+        ttk.Button(file_frame, text="Browse Media", command=self.browse_file).grid(row=1, column=2, padx=(0, 8))
+        ttk.Button(file_frame, text="Clear", command=self.clear_file).grid(row=1, column=3)
+
+        ttk.Separator(file_frame, orient="horizontal").grid(
+            row=2, column=0, columnspan=4, sticky="ew", pady=(10, 8)
+        )
+        ttk.Label(file_frame, text="Or — YouTube URL:").grid(row=3, column=0, sticky="w", padx=(0, 8))
+        self.youtube_url_entry = ttk.Entry(file_frame, textvariable=self.youtube_url_var)
+        self.youtube_url_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(0, 8))
+        ttk.Button(file_frame, text="Clear", command=self.clear_youtube_url).grid(row=3, column=3)
 
         # --- Buttons ---
         btn_frame = ttk.Frame(tab)
@@ -361,8 +373,8 @@ class TranscriptApp:
 
     def _drop_zone_text(self) -> str:
         if DND_AVAILABLE:
-            return "Drag and drop a media file here\n(or use Browse Media below)"
-        return "Browse Media below\n(Install tkinterdnd2 to enable drag and drop)"
+            return "Drag and drop an audio or video file here\n(MP4, MKV, MP3, WAV, M4A, FLAC, and more)\n(or use Browse Media below)"
+        return "Browse Media below — supports MP4, MKV, MP3, WAV, M4A, FLAC, and more\n(Install tkinterdnd2 to enable drag-and-drop)"
 
     def _log(self, message: str) -> None:
         self.console.configure(state="normal")
@@ -397,6 +409,10 @@ class TranscriptApp:
         self.progress["value"] = 0
         self.progress_text_var.set("No active transcription")
         self._log("Cleared selected file.")
+
+    def clear_youtube_url(self) -> None:
+        self.youtube_url_var.set("")
+        self._log("Cleared YouTube URL.")
 
     def _normalize_drop_path(self, raw: str) -> str:
         cleaned = raw.strip()
@@ -435,40 +451,92 @@ class TranscriptApp:
             messagebox.showinfo(APP_TITLE, "A transcription is already running.")
             return
 
-        raw = self.file_path_var.get().strip()
-        if not raw:
-            messagebox.showwarning(APP_TITLE, "Please select a media file first.")
+        raw_file = self.file_path_var.get().strip()
+        raw_url = self.youtube_url_var.get().strip()
+
+        if raw_file and raw_url:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Both a file and a YouTube URL are filled in.\nPlease clear one before starting.",
+            )
             return
 
-        input_path = Path(raw)
-        if not input_path.exists():
-            messagebox.showerror(APP_TITLE, f"File not found:\n{input_path}")
+        if not raw_file and not raw_url:
+            messagebox.showwarning(APP_TITLE, "Please select a media file or enter a YouTube URL first.")
             return
+
+        use_youtube = bool(raw_url) and not raw_file
+
+        if use_youtube and not YT_DLP_AVAILABLE:
+            messagebox.showerror(APP_TITLE, "yt-dlp is not installed.\nRun: pip install yt-dlp")
+            return
+
+        if not use_youtube:
+            input_path = Path(raw_file)
+            if not input_path.exists():
+                messagebox.showerror(APP_TITLE, f"File not found:\n{input_path}")
+                return
 
         self._stop_event.clear()
         self.progress["value"] = 0
-        self.progress_text_var.set("Starting transcription...")
+        self.progress_text_var.set("Starting...")
         self._set_busy(True)
 
         model_name = self.model_var.get().strip() or "large-v3"
         prefer_cuda = self.device_pref_var.get().strip().lower() == "cuda"
 
         self._log("=" * 72)
-        self._log(f"Starting transcription: {input_path}")
-        self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 
         logger = QueueLogger(self.queue, LOGGER)
         stop_event = self._stop_event
 
-        def worker() -> None:
-            try:
-                transcribe_file(input_path, model_name, prefer_cuda, logger, stop_event)
-            except Exception as exc:
-                logger.log("Error during transcription:")
-                logger.log(str(exc))
-                logger.log(traceback.format_exc())
-                LOGGER.exception("Unhandled transcription failure")
-                logger.done(False, f"{exc}\nLog file: {SESSION_LOG_PATH}")
+        if use_youtube:
+            url = raw_url
+            self._log(f"YouTube URL: {url}")
+            self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
+
+            def worker() -> None:
+                downloaded_path: Path | None = None
+                try:
+                    downloaded_path = download_youtube_audio(url, logger, stop_event)
+                    if stop_event.is_set():
+                        logger.log("Download complete but stop was requested — skipping transcription.")
+                        logger.done(False, "cancelled")
+                        return
+                    logger.log(f"Starting transcription: {downloaded_path.name}")
+                    transcribe_file(downloaded_path, model_name, prefer_cuda, logger, stop_event)
+                except Exception as exc:
+                    if stop_event.is_set():
+                        logger.log("Cancelled.")
+                        logger.done(False, "cancelled")
+                    else:
+                        logger.log("Error:")
+                        logger.log(str(exc))
+                        logger.log(traceback.format_exc())
+                        LOGGER.exception("Unhandled YouTube/transcription failure")
+                        logger.done(False, f"{exc}\nLog file: {SESSION_LOG_PATH}")
+                finally:
+                    if downloaded_path is not None and downloaded_path.exists():
+                        try:
+                            downloaded_path.unlink()
+                            logger.log(f"Cleaned up temporary file: {downloaded_path.name}")
+                        except OSError as e:
+                            logger.log(f"Warning: could not delete temp file: {e}")
+
+        else:
+            input_path = Path(raw_file)
+            self._log(f"Starting transcription: {input_path}")
+            self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
+
+            def worker() -> None:  # type: ignore[misc]
+                try:
+                    transcribe_file(input_path, model_name, prefer_cuda, logger, stop_event)
+                except Exception as exc:
+                    logger.log("Error during transcription:")
+                    logger.log(str(exc))
+                    logger.log(traceback.format_exc())
+                    LOGGER.exception("Unhandled transcription failure")
+                    logger.done(False, f"{exc}\nLog file: {SESSION_LOG_PATH}")
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()

@@ -13,27 +13,29 @@ python main.py
 Install required packages:
 
 ```bash
-pip install faster-whisper tkinterdnd2
+pip install faster-whisper tkinterdnd2 yt-dlp
 ```
 
 - `faster-whisper` — required for transcription (uses CTranslate2 under the hood)
 - `tkinterdnd2` — optional, enables drag-and-drop file input
+- `yt-dlp` — optional, enables YouTube URL audio download (requires FFmpeg for MP3 conversion)
 - `ffprobe` (from FFmpeg) — optional, used to detect media duration for ETA calculation
 
 ## Package layout
 
 ```
 src/
-├── constants.py      # APP_TITLE, SUPPORTED_EXTENSIONS, MODEL_OPTIONS, LOG_DIR
+├── constants.py      # APP_TITLE, SUPPORTED_EXTENSIONS, MODEL_OPTIONS, LOG_DIR, YT_DOWNLOAD_DIR
 ├── logging_setup.py  # setup_logging(), LOGGER, SESSION_LOG_PATH, QueueLogger, TranscriptionError
 ├── utils.py          # format_timestamp, seconds_to_human, get_media_duration_seconds, write_txt, write_srt
 ├── cuda.py           # locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
 ├── transcriber.py    # transcribe_file (core logic, runs in background thread)
+├── youtube.py        # download_youtube_audio(), YT_DLP_AVAILABLE — requires yt-dlp + FFmpeg
 └── gui.py            # TranscriptApp, build_root, main()
 main.py               # thin entry point — sets KMP_DUPLICATE_LIB_OK, calls src.gui.main()
 ```
 
-Import graph is strictly one-way: `constants → logging_setup → cuda → transcriber → gui → main.py`.
+Import graph is strictly one-way: `constants → logging_setup → cuda → transcriber → gui → main.py`. `youtube.py` imports from `constants` and `logging_setup` only; it is imported by `gui.py`.
 
 ## Architecture
 

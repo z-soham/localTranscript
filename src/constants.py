@@ -6,3 +6,4 @@ SUPPORTED_EXTENSIONS = {
 }
 MODEL_OPTIONS = ["medium", "large-v3"]
 LOG_DIR = Path.home() / "LocalTranscriptLogs"
+YT_DOWNLOAD_DIR = Path.home() / "LocalTranscriptLogs" / "yt_downloads"
