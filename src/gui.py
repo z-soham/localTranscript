@@ -17,7 +17,7 @@ except ImportError:
 from src.constants import APP_TITLE, MODEL_OPTIONS
 from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
 from src.settings_manager import load_settings, save_settings
-from src.summarizer import summarize_transcript
+from src.summarizer import SUMMARY_MODES, summarize_transcript
 from src.transcriber import transcribe_file
 from src.utils import seconds_to_human
 from src.youtube import YT_DLP_AVAILABLE, download_youtube_audio
@@ -51,6 +51,7 @@ class TranscriptApp:
 
         # Summarisation-tab state
         self.summary_file_var = tk.StringVar()
+        self.summary_mode_var = tk.StringVar(value=SUMMARY_MODES[0])
         self.summary_status_var = tk.StringVar(value="Ready")
 
         self._build_ui()
@@ -193,7 +194,7 @@ class TranscriptApp:
         tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(tab, text="  Summarise  ")
         tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(3, weight=1)
+        tab.rowconfigure(4, weight=1)
 
         # --- File input ---
         file_frame = ttk.LabelFrame(tab, text="Transcript Input", padding=12)
@@ -226,9 +227,35 @@ class TranscriptApp:
             row=0, column=3, sticky="w", padx=(6, 0)
         )
 
+        # --- Summary mode ---
+        mode_frame = ttk.LabelFrame(tab, text="Summary Mode", padding=10)
+        mode_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+
+        for i, mode in enumerate(SUMMARY_MODES):
+            ttk.Radiobutton(
+                mode_frame,
+                text=mode,
+                variable=self.summary_mode_var,
+                value=mode,
+            ).grid(row=0, column=i, sticky="w", padx=(0, 24))
+
+        mode_descriptions = {
+            "Meeting": "Minutes of Meeting, key decisions, action items, participants, next steps.",
+            "General Video": "Overview, key takeaways, important details, suggestions, further exploration.",
+        }
+        self._mode_desc_label = ttk.Label(
+            mode_frame, text=mode_descriptions[SUMMARY_MODES[0]], foreground="#aaaaaa", font=("Segoe UI", 9)
+        )
+        self._mode_desc_label.grid(row=1, column=0, columnspan=len(SUMMARY_MODES), sticky="w", pady=(4, 0))
+
+        def _update_mode_desc(*_):
+            self._mode_desc_label.configure(text=mode_descriptions.get(self.summary_mode_var.get(), ""))
+
+        self.summary_mode_var.trace_add("write", _update_mode_desc)
+
         # --- Action buttons ---
         btn_frame = ttk.Frame(tab)
-        btn_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        btn_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         btn_frame.columnconfigure(0, weight=1)
         btn_frame.columnconfigure(1, weight=1)
 
@@ -242,7 +269,7 @@ class TranscriptApp:
 
         # --- Output ---
         out_frame = ttk.LabelFrame(tab, text="Summary Output", padding=12)
-        out_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 4))
+        out_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 4))
         out_frame.columnconfigure(0, weight=1)
         out_frame.rowconfigure(0, weight=1)
 
@@ -255,7 +282,7 @@ class TranscriptApp:
         self.summary_output.configure(yscrollcommand=sum_scroll.set)
 
         ttk.Label(tab, textvariable=self.summary_status_var, foreground="#aaaaaa").grid(
-            row=4, column=0, sticky="w", pady=(2, 0)
+            row=5, column=0, sticky="w", pady=(2, 0)
         )
 
     # ------------------------------------------------------------------
@@ -636,6 +663,7 @@ class TranscriptApp:
             return
 
         api_key = self.llm_api_key_var.get()
+        mode = self.summary_mode_var.get()
 
         self.summarise_btn.configure(state="disabled")
         self.save_summary_btn.configure(state="disabled")
@@ -647,7 +675,7 @@ class TranscriptApp:
 
         def worker() -> None:
             try:
-                result = summarize_transcript(input_path, llm_url, api_key, llm_model)
+                result = summarize_transcript(input_path, llm_url, api_key, llm_model, mode)
                 self.root.after(0, lambda: self._on_summary_done(result, None))
             except Exception as exc:
                 err = str(exc)

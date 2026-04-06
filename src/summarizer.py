@@ -14,13 +14,20 @@ import urllib.request
 from pathlib import Path
 
 
+SUMMARY_MODES = ["Meeting", "General Video"]
+
+
 def summarize_transcript(
     file_path: Path,
     llm_url: str,
     api_key: str,
     llm_model: str,
+    mode: str = "Meeting",
 ) -> str:
-    """Read a .txt or .srt transcript file and return a formatted summary."""
+    """Read a .txt or .srt transcript file and return a formatted summary.
+
+    mode: "Meeting" for MoM-style output, "General Video" for takeaways/suggestions.
+    """
     text = file_path.read_text(encoding="utf-8", errors="replace")
 
     if file_path.suffix.lower() == ".srt":
@@ -29,7 +36,18 @@ def summarize_transcript(
     if not text.strip():
         raise ValueError("The transcript file appears to be empty.")
 
-    prompt = _build_prompt(text)
+    if mode == "General Video":
+        system_msg = (
+            "You are a helpful content analyst. "
+            "Produce well-structured, concise video summaries in Markdown."
+        )
+        prompt = _build_general_prompt(text)
+    else:
+        system_msg = (
+            "You are a professional meeting assistant. "
+            "Produce well-structured, concise meeting summaries in Markdown."
+        )
+        prompt = _build_meeting_prompt(text)
 
     base_url = llm_url.rstrip("/")
     endpoint = base_url if base_url.endswith("/chat/completions") else base_url + "/chat/completions"
@@ -37,13 +55,7 @@ def summarize_transcript(
     payload = {
         "model": llm_model,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional meeting assistant. "
-                    "Produce well-structured, concise meeting summaries in Markdown."
-                ),
-            },
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
@@ -92,7 +104,7 @@ def _strip_srt_timestamps(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
-def _build_prompt(transcript_text: str) -> str:
+def _build_meeting_prompt(transcript_text: str) -> str:
     return f"""\
 You are given a meeting transcript below. Analyse it thoroughly and produce a structured summary using **exactly** the Markdown sections shown. Use bullet points and be concise.
 
@@ -120,6 +132,41 @@ _List names, roles, or teams mentioned in the transcript._
 ## Next Steps
 
 _What happens after this meeting — follow-ups, upcoming meetings, deadlines._
+
+---
+
+**Transcript:**
+
+{transcript_text}
+"""
+
+
+def _build_general_prompt(transcript_text: str) -> str:
+    return f"""\
+You are given a video transcript below. Analyse it thoroughly and produce a structured summary using **exactly** the Markdown sections shown. Use bullet points and be concise.
+
+---
+
+## Overview
+
+_A brief description of what the video is about — topic, format, and purpose._
+
+## Key Takeaways
+
+- _Main point 1_
+- _Main point 2_
+
+## Important Details
+
+_Notable facts, data points, examples, or explanations covered in the video._
+
+## Suggestions & Recommendations
+
+_Any advice, tips, or recommendations given in the video. Omit this section if none._
+
+## Further Exploration
+
+_Related topics, resources, or questions the viewer might want to explore after watching._
 
 ---
 
