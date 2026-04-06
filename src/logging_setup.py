@@ -4,7 +4,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from local_transcript.constants import LOG_DIR
+from src.constants import LOG_DIR
 
 
 def setup_logging() -> tuple[logging.Logger, Path]:

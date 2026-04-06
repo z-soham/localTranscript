@@ -59,7 +59,7 @@ Given an input file `interview.mp4`, two files are created in the same directory
 ## Project structure
 
 ```
-local_transcript/
+src/
 ├── constants.py      # Shared constants
 ├── logging_setup.py  # Logging, QueueLogger, TranscriptionError
 ├── utils.py          # Timestamp formatting, file writing, media duration

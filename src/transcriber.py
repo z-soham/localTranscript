@@ -8,10 +8,10 @@ try:
 except ImportError:
     WhisperModel = None
 
-from local_transcript.constants import SUPPORTED_EXTENSIONS
-from local_transcript.cuda import locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
-from local_transcript.logging_setup import QueueLogger, TranscriptionError
-from local_transcript.utils import get_media_duration_seconds, seconds_to_human, write_srt, write_txt
+from src.constants import SUPPORTED_EXTENSIONS
+from src.cuda import locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
+from src.logging_setup import QueueLogger, TranscriptionError
+from src.utils import get_media_duration_seconds, seconds_to_human, write_srt, write_txt
 
 
 def transcribe_file(

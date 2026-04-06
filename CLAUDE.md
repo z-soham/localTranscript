@@ -23,14 +23,14 @@ pip install faster-whisper tkinterdnd2
 ## Package layout
 
 ```
-local_transcript/
+src/
 ├── constants.py      # APP_TITLE, SUPPORTED_EXTENSIONS, MODEL_OPTIONS, LOG_DIR
 ├── logging_setup.py  # setup_logging(), LOGGER, SESSION_LOG_PATH, QueueLogger, TranscriptionError
 ├── utils.py          # format_timestamp, seconds_to_human, get_media_duration_seconds, write_txt, write_srt
 ├── cuda.py           # locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
 ├── transcriber.py    # transcribe_file (core logic, runs in background thread)
 └── gui.py            # TranscriptApp, build_root, main()
-main.py               # thin entry point — sets KMP_DUPLICATE_LIB_OK, calls local_transcript.gui.main()
+main.py               # thin entry point — sets KMP_DUPLICATE_LIB_OK, calls src.gui.main()
 ```
 
 Import graph is strictly one-way: `constants → logging_setup → cuda → transcriber → gui → main.py`.

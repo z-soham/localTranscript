@@ -14,10 +14,10 @@ except ImportError:
     DND_FILES = None
     TkinterDnD = None
 
-from local_transcript.constants import APP_TITLE, MODEL_OPTIONS
-from local_transcript.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
-from local_transcript.transcriber import transcribe_file
-from local_transcript.utils import seconds_to_human
+from src.constants import APP_TITLE, MODEL_OPTIONS
+from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
+from src.transcriber import transcribe_file
+from src.utils import seconds_to_human
 
 
 class TranscriptApp:
@@ -163,7 +163,7 @@ class TranscriptApp:
         LOGGER.info("Session log file: %s", self.session_log_path)
         if not DND_AVAILABLE:
             self._log("Drag-and-drop support is disabled. Install tkinterdnd2 to enable it: pip install tkinterdnd2")
-        from local_transcript.transcriber import WhisperModel
+        from src.transcriber import WhisperModel
         if WhisperModel is None:
             self._log("faster-whisper is not installed. Install it with: pip install faster-whisper")
 

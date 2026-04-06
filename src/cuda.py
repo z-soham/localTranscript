@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-from local_transcript.logging_setup import QueueLogger
+from src.logging_setup import QueueLogger
 
 
 def locate_cudnn_hint() -> str | None:
