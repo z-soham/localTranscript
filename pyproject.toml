@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-transcript-studio"
@@ -9,19 +9,16 @@ description = "Local AI-powered audio/video transcription with multi-speaker sup
 requires-python = ">=3.9"
 dependencies = [
     "faster-whisper>=1.0.0",
+    "tkinterdnd2",
+    "yt-dlp",
+    "pyannote-audio",
 ]
-
-[project.optional-dependencies]
-dnd = ["tkinterdnd2"]
-youtube = ["yt-dlp"]
-all = ["tkinterdnd2", "yt-dlp"]
 
 [project.scripts]
 local-transcript = "src.gui:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+[tool.setuptools]
+py-modules = ["src.gui"]
 
 [project.urls]
 Repository = "https://github.com/z-soham/localTranscript"

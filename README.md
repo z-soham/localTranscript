@@ -34,22 +34,6 @@ Clone the repo and install using `pip`:
 # Core only (transcription)
 pip install .
 
-# With drag-and-drop support
-pip install ".[dnd]"
-
-# With YouTube download support
-pip install ".[youtube]"
-
-# Everything
-pip install ".[all]"
-```
-
-To enable speaker diarization:
-
-```bash
-pip install pyannote-audio
-```
-
 ### FFmpeg (optional)
 
 FFmpeg provides two things: `ffprobe` for ETA calculation during transcription, and the audio extraction pipeline used when downloading YouTube videos. It is also required for diarization of video files (MP4, MKV, etc.).

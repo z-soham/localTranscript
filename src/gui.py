@@ -1,5 +1,6 @@
 import os
 import queue
+import re
 import signal
 import traceback
 import threading
@@ -48,7 +49,6 @@ class TranscriptApp:
 
         # Transcription-tab state
         self.file_path_var = tk.StringVar()
-        self.youtube_url_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
         self.progress_text_var = tk.StringVar(value="No active transcription")
 
@@ -134,17 +134,19 @@ class TranscriptApp:
             self.drop_zone.drop_target_register(DND_FILES)
             self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)
 
-        ttk.Entry(file_frame, textvariable=self.file_path_var).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 8))
+        self.input_entry = ttk.Entry(file_frame, textvariable=self.file_path_var)
+        self.input_entry.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 8))
+        self.input_entry.bind("<KeyRelease>", self._on_input_key)
         ttk.Button(file_frame, text="Browse Media", command=self.browse_file).grid(row=1, column=2, padx=(0, 8))
         ttk.Button(file_frame, text="Clear", command=self.clear_file).grid(row=1, column=3)
 
-        ttk.Separator(file_frame, orient="horizontal").grid(
-            row=2, column=0, columnspan=4, sticky="ew", pady=(10, 8)
+        self.input_hint_label = ttk.Label(
+            file_frame,
+            text="",
+            foreground="#aaaaaa",
+            font=("Segoe UI", 9),
         )
-        ttk.Label(file_frame, text="Or — YouTube URL:").grid(row=3, column=0, sticky="w", padx=(0, 8))
-        self.youtube_url_entry = ttk.Entry(file_frame, textvariable=self.youtube_url_var)
-        self.youtube_url_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(0, 8))
-        ttk.Button(file_frame, text="Clear", command=self.clear_youtube_url).grid(row=3, column=3)
+        self.input_hint_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         # --- Buttons ---
         btn_frame = ttk.Frame(tab)
@@ -203,10 +205,23 @@ class TranscriptApp:
         file_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         file_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(
+        self.summary_drop_zone = tk.Label(
             file_frame,
-            text="Select a .txt or .srt transcript to summarise with an LLM.",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+            text=self._summary_drop_zone_text(),
+            relief="groove",
+            borderwidth=2,
+            padx=16,
+            pady=18,
+            bg="#2d2d2d",
+            fg="#cccccc",
+            font=("Segoe UI", 11),
+            justify="center",
+        )
+        self.summary_drop_zone.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+
+        if DND_AVAILABLE:
+            self.summary_drop_zone.drop_target_register(DND_FILES)
+            self.summary_drop_zone.dnd_bind("<<Drop>>", self._on_summary_drop)
 
         ttk.Entry(file_frame, textvariable=self.summary_file_var).grid(row=1, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(file_frame, text="Browse Transcript", command=self.browse_summary_file).grid(
@@ -441,10 +456,24 @@ class TranscriptApp:
     # Transcription helpers
     # ------------------------------------------------------------------
 
+    _YOUTUBE_RE = re.compile(
+        r"(https?://)?(www\.)?(youtube\.com/(watch|shorts|embed|live)|youtu\.be/)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_youtube_url(cls, text: str) -> bool:
+        return bool(cls._YOUTUBE_RE.search(text))
+
     def _drop_zone_text(self) -> str:
         if DND_AVAILABLE:
-            return "Drag and drop an audio or video file here\n(MP4, MKV, MP3, WAV, M4A, FLAC, and more)\n(or use Browse Media below)"
-        return "Browse Media below — supports MP4, MKV, MP3, WAV, M4A, FLAC, and more\n(Install tkinterdnd2 to enable drag-and-drop)"
+            return "Drag and drop an audio or video file here\n(MP4, MKV, MP3, WAV, M4A, FLAC, and more)\n(or use Browse Media below, or paste a YouTube URL)"
+        return "Browse Media below — supports MP4, MKV, MP3, WAV, M4A, FLAC, and more\n(Paste a YouTube URL or install tkinterdnd2 to enable drag-and-drop)"
+
+    def _summary_drop_zone_text(self) -> str:
+        if DND_AVAILABLE:
+            return "Drag and drop a transcript file here\n(.txt or .srt)\n(or use Browse Transcript below)"
+        return "Browse Transcript below — supports .txt and .srt files\n(Install tkinterdnd2 to enable drag-and-drop)"
 
     def _log(self, message: str) -> None:
         self.console.configure(state="normal")
@@ -480,9 +509,12 @@ class TranscriptApp:
         self.progress_text_var.set("No active transcription")
         self._log("Cleared selected file.")
 
-    def clear_youtube_url(self) -> None:
-        self.youtube_url_var.set("")
-        self._log("Cleared YouTube URL.")
+    def _on_input_key(self, _event=None) -> None:
+        text = self.file_path_var.get().strip()
+        if self._is_youtube_url(text):
+            self.input_hint_label.configure(text="YouTube URL detected — will download audio and transcribe.")
+        else:
+            self.input_hint_label.configure(text="")
 
     def _normalize_drop_path(self, raw: str) -> str:
         cleaned = raw.strip()
@@ -497,6 +529,13 @@ class TranscriptApp:
         if paths:
             self.file_path_var.set(self._normalize_drop_path(paths[0]))
             self._log(f"Dropped file: {paths[0]}")
+
+    def _on_summary_drop(self, event) -> None:
+        if not event.data:
+            return
+        paths = self.root.tk.splitlist(event.data)
+        if paths:
+            self.summary_file_var.set(self._normalize_drop_path(paths[0]))
 
     def open_output_folder(self) -> None:
         raw = self.file_path_var.get().strip()
@@ -521,28 +560,20 @@ class TranscriptApp:
             messagebox.showinfo(APP_TITLE, "A transcription is already running.")
             return
 
-        raw_file = self.file_path_var.get().strip()
-        raw_url = self.youtube_url_var.get().strip()
+        raw_input = self.file_path_var.get().strip()
 
-        if raw_file and raw_url:
-            messagebox.showwarning(
-                APP_TITLE,
-                "Both a file and a YouTube URL are filled in.\nPlease clear one before starting.",
-            )
-            return
-
-        if not raw_file and not raw_url:
+        if not raw_input:
             messagebox.showwarning(APP_TITLE, "Please select a media file or enter a YouTube URL first.")
             return
 
-        use_youtube = bool(raw_url) and not raw_file
+        use_youtube = self._is_youtube_url(raw_input)
 
         if use_youtube and not YT_DLP_AVAILABLE:
             messagebox.showerror(APP_TITLE, "yt-dlp is not installed.\nRun: pip install yt-dlp")
             return
 
         if not use_youtube:
-            input_path = Path(raw_file)
+            input_path = Path(raw_input)
             if not input_path.exists():
                 messagebox.showerror(APP_TITLE, f"File not found:\n{input_path}")
                 return
@@ -561,7 +592,7 @@ class TranscriptApp:
         stop_event = self._stop_event
 
         if use_youtube:
-            url = raw_url
+            url = raw_input
             self._log(f"YouTube URL: {url}")
             self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 
@@ -598,7 +629,7 @@ class TranscriptApp:
                             logger.log(f"Warning: could not delete temp file: {e}")
 
         else:
-            input_path = Path(raw_file)
+            input_path = Path(raw_input)
             self._log(f"Starting transcription: {input_path}")
             self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 

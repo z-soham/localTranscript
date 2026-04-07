@@ -1,3 +1,4 @@
+import gc
 import threading
 import time
 import traceback
@@ -100,28 +101,63 @@ def transcribe_file(
         condition_on_previous_text=True,
     )
 
+    def _iterate_segments(gen) -> bool:
+        """Iterate a segments generator, updating progress. Returns True if cancelled."""
+        nonlocal segments, last_end, cancelled
+        segments = []
+        last_end = 0.0
+        cancelled = False
+        for segment in gen:
+            if stop_event is not None and stop_event.is_set():
+                cancelled = True
+                break
+            segments.append(segment)
+            last_end = max(last_end, float(segment.end))
+            elapsed = time.time() - start_time
+            if duration_seconds and duration_seconds > 0:
+                progress = max(0.0, min(1.0, last_end / duration_seconds))
+                speed_x = (last_end / elapsed) if elapsed > 0 else None
+                remaining_audio = max(0.0, duration_seconds - last_end)
+                eta = (remaining_audio / speed_x) if speed_x and speed_x > 0 else None
+                logger.progress(progress, last_end, duration_seconds, elapsed, eta, speed_x)
+            else:
+                logger.progress(0.0, last_end, None, elapsed, None, None)
+        return cancelled
+
     segments = []
     start_time = time.time()
     last_end = 0.0
-
     cancelled = False
-    for segment in segments_generator:
-        if stop_event is not None and stop_event.is_set():
-            cancelled = True
-            break
 
-        segments.append(segment)
-        last_end = max(last_end, float(segment.end))
-        elapsed = time.time() - start_time
+    try:
+        cancelled = _iterate_segments(segments_generator)
+    except RuntimeError as e:
+        if "out of memory" not in str(e).lower() or device_used != "cuda":
+            raise
+        logger.log("CUDA out of memory during transcription.")
+        logger.log("Freeing GPU memory and retrying on CPU...")
+        del model
+        model = None
+        gc.collect()
 
-        if duration_seconds and duration_seconds > 0:
-            progress = max(0.0, min(1.0, last_end / duration_seconds))
-            speed_x = (last_end / elapsed) if elapsed > 0 else None
-            remaining_audio = max(0.0, duration_seconds - last_end)
-            eta = (remaining_audio / speed_x) if speed_x and speed_x > 0 else None
-            logger.progress(progress, last_end, duration_seconds, elapsed, eta, speed_x)
-        else:
-            logger.progress(0.0, last_end, None, elapsed, None, None)
+        logger.log(f"Loading model '{model_name}' on CPU (retry)...")
+        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        device_used = "cpu"
+        logger.log("Retrying transcription on CPU...")
+        segments_generator, info = model.transcribe(
+            str(input_path),
+            beam_size=5,
+            vad_filter=True,
+            language="en",
+            condition_on_previous_text=True,
+        )
+        start_time = time.time()
+        cancelled = _iterate_segments(segments_generator)
+    finally:
+        if model is not None:
+            del model
+            model = None
+            gc.collect()
 
     if cancelled:
         logger.log("Transcription cancelled by user.")
