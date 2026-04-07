@@ -28,8 +28,20 @@ For GPU acceleration, a CUDA-capable GPU with cuDNN 9 installed is required.
 
 ## Installation
 
+Clone the repo and install using `pip`:
+
 ```bash
-pip install faster-whisper tkinterdnd2 yt-dlp
+# Core only (transcription)
+pip install .
+
+# With drag-and-drop support
+pip install ".[dnd]"
+
+# With YouTube download support
+pip install ".[youtube]"
+
+# Everything
+pip install ".[all]"
 ```
 
 To enable speaker diarization:
@@ -71,6 +83,8 @@ sudo dnf install ffmpeg
 
 ```bash
 python main.py
+# or, if installed via pip:
+local-transcript
 ```
 
 1. Drag a media file onto the drop zone, or click **Browse MP4 / Media**
