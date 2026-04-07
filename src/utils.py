@@ -58,18 +58,20 @@ def get_media_duration_seconds(input_file: Path) -> float | None:
         return None
 
 
-def write_txt(output_path: Path, segments) -> None:
+def write_txt(output_path: Path, segments, speaker_map: dict[int, str] | None = None) -> None:
     with output_path.open("w", encoding="utf-8") as f:
-        for segment in segments:
+        for i, segment in enumerate(segments):
             text = segment.text.strip()
             if text:
-                f.write(text + "\n")
+                prefix = f"{speaker_map[i]}: " if speaker_map and i in speaker_map else ""
+                f.write(prefix + text + "\n")
 
 
-def write_srt(output_path: Path, segments) -> None:
+def write_srt(output_path: Path, segments, speaker_map: dict[int, str] | None = None) -> None:
     with output_path.open("w", encoding="utf-8") as f:
-        for i, segment in enumerate(segments, start=1):
+        for i, segment in enumerate(segments):
             start = format_timestamp(segment.start)
             end = format_timestamp(segment.end)
             text = segment.text.strip()
-            f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            prefix = f"[{speaker_map[i]}] " if speaker_map and i in speaker_map else ""
+            f.write(f"{i+1}\n{start} --> {end}\n{prefix}{text}\n\n")

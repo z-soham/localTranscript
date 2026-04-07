@@ -10,8 +10,22 @@ except ImportError:
 
 from src.constants import SUPPORTED_EXTENSIONS
 from src.cuda import locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
+from src.diarizer import is_available as diarization_available, run_diarization
 from src.logging_setup import QueueLogger, TranscriptionError
 from src.utils import get_media_duration_seconds, seconds_to_human, write_srt, write_txt
+
+
+def _match_segments_to_speakers(segments, intervals: list[tuple[float, float, str]]) -> dict[int, str]:
+    """Map each segment index to the speaker label with maximum overlap."""
+    result = {}
+    for i, seg in enumerate(segments):
+        best_label, best_overlap = "SPEAKER_00", 0.0
+        for (iv_start, iv_end, label) in intervals:
+            overlap = min(seg.end, iv_end) - max(seg.start, iv_start)
+            if overlap > best_overlap:
+                best_overlap, best_label = overlap, label
+        result[i] = best_label
+    return result
 
 
 def transcribe_file(
@@ -20,6 +34,9 @@ def transcribe_file(
     prefer_cuda: bool,
     logger: QueueLogger,
     stop_event: threading.Event | None = None,
+    *,
+    diarize: bool = False,
+    hf_token: str = "",
 ) -> None:
     if WhisperModel is None:
         raise TranscriptionError(
@@ -111,6 +128,21 @@ def transcribe_file(
         logger.done(False, "cancelled")
         return
 
+    speaker_map: dict[int, str] | None = None
+
+    if diarize:
+        if not hf_token:
+            logger.log("Diarization skipped: no HuggingFace token configured in Settings.")
+        elif not diarization_available():
+            logger.log("Diarization skipped: pyannote.audio not installed (pip install pyannote-audio).")
+        else:
+            logger.log("Running speaker diarization...")
+            intervals = run_diarization(input_path, hf_token, logger, stop_event)
+            if intervals is not None:
+                speaker_map = _match_segments_to_speakers(segments, intervals)
+                unique = len(set(speaker_map.values()))
+                logger.log(f"Diarization complete. Detected {unique} speaker(s).")
+
     total_wall = time.time() - start_time
     logger.log("")
     logger.log(f"Detected language: {info.language} (probability: {info.language_probability:.3f})")
@@ -123,8 +155,8 @@ def transcribe_file(
     txt_output = base_output.with_name(base_output.name + "_transcript.txt")
     srt_output = base_output.with_name(base_output.name + "_subtitles.srt")
 
-    write_txt(txt_output, segments)
-    write_srt(srt_output, segments)
+    write_txt(txt_output, segments, speaker_map)
+    write_srt(srt_output, segments, speaker_map)
 
     logger.log(f"Transcript written to: {txt_output}")
     logger.log(f"Subtitles written to:  {srt_output}")

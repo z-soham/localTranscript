@@ -11,6 +11,8 @@ DEFAULT_SETTINGS: dict = {
     "llm_url": "https://openrouter.ai/api/v1",
     "llm_api_key": "",
     "llm_model": "openai/gpt-4o-mini",
+    "diarize_enabled": False,
+    "hf_token": "",
 }
 
 

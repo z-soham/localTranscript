@@ -43,6 +43,8 @@ class TranscriptApp:
         self.llm_url_var = tk.StringVar(value=_s["llm_url"])
         self.llm_api_key_var = tk.StringVar(value=_s["llm_api_key"])
         self.llm_model_var = tk.StringVar(value=_s["llm_model"])
+        self.diarize_var = tk.BooleanVar(value=_s["diarize_enabled"])
+        self.hf_token_var = tk.StringVar(value=_s["hf_token"])
 
         # Transcription-tab state
         self.file_path_var = tk.StringVar()
@@ -373,6 +375,45 @@ class TranscriptApp:
         ).grid(row=r, column=1, sticky="w", pady=(0, 12))
         r += 1
 
+        # Spacer
+        ttk.Label(tab, text="").grid(row=r, column=0)
+        r += 1
+
+        # == Speaker Diarization ==
+        ttk.Label(tab, text="Speaker Diarization", font=("Segoe UI", 11, "bold")).grid(
+            row=r, column=0, columnspan=2, sticky="w"
+        )
+        r += 1
+        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        r += 1
+
+        ttk.Checkbutton(
+            tab, text="Enable speaker diarization", variable=self.diarize_var
+        ).grid(row=r, column=0, columnspan=2, sticky="w", pady=5)
+        r += 1
+
+        ttk.Label(tab, text="HuggingFace token:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        self._hf_token_entry = ttk.Entry(tab, textvariable=self.hf_token_var, show="*", width=54)
+        self._hf_token_entry.grid(row=r, column=1, sticky="ew")
+        r += 1
+        ttk.Label(
+            tab,
+            text="Required once to download model from HuggingFace. Inference is fully offline after that.",
+            foreground="#aaaaaa",
+            font=("Segoe UI", 9),
+        ).grid(row=r, column=1, sticky="w", pady=(0, 6))
+        r += 1
+
+        show_hf_var = tk.BooleanVar(value=False)
+
+        def _toggle_hf_visibility():
+            self._hf_token_entry.configure(show="" if show_hf_var.get() else "*")
+
+        ttk.Checkbutton(
+            tab, text="Show token", variable=show_hf_var, command=_toggle_hf_visibility
+        ).grid(row=r, column=1, sticky="w", pady=(0, 12))
+        r += 1
+
         # Save row
         save_row = ttk.Frame(tab)
         save_row.grid(row=r, column=0, columnspan=2, sticky="w", pady=(4, 0))
@@ -389,6 +430,8 @@ class TranscriptApp:
                 "llm_url": self.llm_url_var.get().strip(),
                 "llm_api_key": self.llm_api_key_var.get(),
                 "llm_model": self.llm_model_var.get().strip(),
+                "diarize_enabled": self.diarize_var.get(),
+                "hf_token": self.hf_token_var.get(),
             }
         )
         self._settings_status.configure(text="Settings saved.")
@@ -531,7 +574,11 @@ class TranscriptApp:
                         logger.done(False, "cancelled")
                         return
                     logger.log(f"Starting transcription: {downloaded_path.name}")
-                    transcribe_file(downloaded_path, model_name, prefer_cuda, logger, stop_event)
+                    transcribe_file(
+                        downloaded_path, model_name, prefer_cuda, logger, stop_event,
+                        diarize=self.diarize_var.get(),
+                        hf_token=self.hf_token_var.get().strip(),
+                    )
                 except Exception as exc:
                     if stop_event.is_set():
                         logger.log("Cancelled.")
@@ -557,7 +604,11 @@ class TranscriptApp:
 
             def worker() -> None:  # type: ignore[misc]
                 try:
-                    transcribe_file(input_path, model_name, prefer_cuda, logger, stop_event)
+                    transcribe_file(
+                        input_path, model_name, prefer_cuda, logger, stop_event,
+                        diarize=self.diarize_var.get(),
+                        hf_token=self.hf_token_var.get().strip(),
+                    )
                 except Exception as exc:
                     logger.log("Error during transcription:")
                     logger.log(str(exc))
