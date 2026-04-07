@@ -1,5 +1,6 @@
 import os
 import queue
+import signal
 import traceback
 import threading
 import tkinter as tk
@@ -18,7 +19,7 @@ from src.constants import APP_TITLE, MODEL_OPTIONS
 from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
 from src.settings_manager import load_settings, save_settings
 from src.summarizer import SUMMARY_MODES, summarize_transcript
-from src.transcriber import transcribe_file
+from src.transcriber import WhisperModel, transcribe_file
 from src.utils import seconds_to_human
 from src.youtube import YT_DLP_AVAILABLE, download_youtube_audio
 
@@ -93,7 +94,6 @@ class TranscriptApp:
         LOGGER.info("Session log: %s", self.session_log_path)
         if not DND_AVAILABLE:
             self._log("Drag-and-drop disabled — install tkinterdnd2 to enable: pip install tkinterdnd2")
-        from src.transcriber import WhisperModel
         if WhisperModel is None:
             self._log("faster-whisper not installed — run: pip install faster-whisper")
         if not YT_DLP_AVAILABLE:
@@ -815,6 +815,16 @@ def build_root() -> tk.Tk:
 
 
 def main() -> None:
+    # On first run on Windows, loading ctranslate2 (faster_whisper's backend) fires
+    # a spurious SIGINT into the Python main thread, which closes the app.
+    # Suppress SIGINT while the DLLs initialise, then restore normal Ctrl+C handling.
+    _old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        import faster_whisper  # noqa: F401 — pre-warms ctranslate2 DLL load
+    except ImportError:
+        pass
+    signal.signal(signal.SIGINT, _old_sigint)
+
     try:
         root = build_root()
         _setup_dark_theme(root)

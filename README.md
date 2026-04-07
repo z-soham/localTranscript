@@ -24,7 +24,36 @@ For GPU acceleration, a CUDA-capable GPU with cuDNN 9 installed is required.
 ## Installation
 
 ```bash
-pip install faster-whisper tkinterdnd2
+pip install faster-whisper tkinterdnd2 yt-dlp
+```
+
+### FFmpeg (optional)
+
+FFmpeg provides two things: `ffprobe` for ETA calculation during transcription, and the audio extraction pipeline used when downloading YouTube videos.
+
+**Windows**
+
+1. Download a build from [ffmpeg.org/download](https://ffmpeg.org/download.html) (e.g. the *gyan.dev* release) or install via winget:
+   ```
+   winget install ffmpeg
+   ```
+2. Extract the archive and add the `bin\` folder to your `PATH`, or place `ffmpeg.exe` and `ffprobe.exe` somewhere already on `PATH` (e.g. `C:\Windows\System32`).
+3. Verify with `ffprobe -version` in a new terminal.
+
+**macOS**
+
+```bash
+brew install ffmpeg
+```
+
+**Linux**
+
+```bash
+# Debian / Ubuntu
+sudo apt install ffmpeg
+
+# Fedora
+sudo dnf install ffmpeg
 ```
 
 ## Usage
