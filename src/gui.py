@@ -583,6 +583,10 @@ class TranscriptApp:
         self.progress_text_var.set("Starting...")
         self._set_busy(True)
 
+        # CTranslate2 on Windows can fire spurious SIGINT during long compute runs.
+        # Suppress it for the lifetime of the worker; _handle_done restores it.
+        self._saved_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+
         model_name = self.model_var.get().strip() or "large-v3"
         prefer_cuda = self.device_pref_var.get().strip().lower() == "cuda"
 
@@ -610,7 +614,7 @@ class TranscriptApp:
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
                     )
-                except Exception as exc:
+                except BaseException as exc:
                     if stop_event.is_set():
                         logger.log("Cancelled.")
                         logger.done(False, "cancelled")
@@ -640,7 +644,7 @@ class TranscriptApp:
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
                     )
-                except Exception as exc:
+                except BaseException as exc:
                     logger.log("Error during transcription:")
                     logger.log(str(exc))
                     logger.log(traceback.format_exc())
@@ -689,6 +693,10 @@ class TranscriptApp:
         success = payload["success"]
         message = payload["message"]
         self._set_busy(False)
+        saved = getattr(self, "_saved_sigint", None)
+        if saved is not None:
+            signal.signal(signal.SIGINT, saved)
+            self._saved_sigint = None
         if success:
             self.progress["value"] = 100
             self.progress_text_var.set("Completed")

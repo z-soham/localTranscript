@@ -16,6 +16,27 @@ from src.logging_setup import QueueLogger, TranscriptionError
 from src.utils import get_media_duration_seconds, seconds_to_human, write_srt, write_txt
 
 
+# CTranslate2's CUDA teardown calls abort() on Windows — neither del nor
+# unload_model() is safe to call explicitly.  Keep CUDA models alive by name
+# and reuse them across transcriptions.  VRAM is reclaimed at process exit.
+_cuda_model_cache: dict[str, "WhisperModel"] = {}
+
+
+def _release_model(model, device_used: str | None, logger: "QueueLogger") -> None:
+    if model is None:
+        return
+    if device_used == "cuda":
+        logger.log("GPU model retained until exit.")
+        return
+    logger.log("Releasing model from memory...")
+    try:
+        del model
+        gc.collect()
+        logger.log("Model released.")
+    except Exception as e:
+        logger.log(f"Warning: error during model cleanup (non-fatal): {e}")
+
+
 def _match_segments_to_speakers(segments, intervals: list[tuple[float, float, str]]) -> dict[int, str]:
     """Map each segment index to the speaker label with maximum overlap."""
     result = {}
@@ -59,9 +80,15 @@ def transcribe_file(
     if prefer_cuda:
         preload_cuda_paths(logger)
         try:
-            logger.log(f"Loading model '{model_name}' on CUDA...")
-            model = WhisperModel(model_name, device="cuda", compute_type="float16")
-            device_used = "cuda"
+            if model_name in _cuda_model_cache:
+                model = _cuda_model_cache[model_name]
+                device_used = "cuda"
+                logger.log(f"Reusing cached model '{model_name}' on CUDA.")
+            else:
+                logger.log(f"Loading model '{model_name}' on CUDA...")
+                model = WhisperModel(model_name, device="cuda", compute_type="float16")
+                _cuda_model_cache[model_name] = model
+                device_used = "cuda"
         except BaseException as e:
             error_text = str(e)
             logger.log(f"CUDA load failed: {error_text}")
@@ -131,14 +158,14 @@ def transcribe_file(
 
     try:
         cancelled = _iterate_segments(segments_generator)
-    except RuntimeError as e:
-        if "out of memory" not in str(e).lower() or device_used != "cuda":
+    except Exception as e:
+        is_cuda_oom = device_used == "cuda" and "out of memory" in str(e).lower()
+        if not is_cuda_oom:
             raise
         logger.log("CUDA out of memory during transcription.")
         logger.log("Freeing GPU memory and retrying on CPU...")
-        del model
+        _release_model(model, device_used, logger)
         model = None
-        gc.collect()
 
         logger.log(f"Loading model '{model_name}' on CPU (retry)...")
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
@@ -153,47 +180,49 @@ def transcribe_file(
         )
         start_time = time.time()
         cancelled = _iterate_segments(segments_generator)
+
+    # Write output and signal completion BEFORE releasing the model.
+    # The model release (especially CUDA teardown) can trigger a native abort;
+    # doing all important work first ensures output is saved even if cleanup crashes.
+    try:
+        if cancelled:
+            logger.log("Transcription cancelled by user.")
+            logger.done(False, "cancelled")
+            return
+
+        speaker_map: dict[int, str] | None = None
+
+        if diarize:
+            if not hf_token:
+                logger.log("Diarization skipped: no HuggingFace token configured in Settings.")
+            elif not diarization_available():
+                logger.log("Diarization skipped: pyannote.audio not installed (pip install pyannote-audio).")
+            else:
+                logger.log("Running speaker diarization...")
+                intervals = run_diarization(input_path, hf_token, logger, stop_event)
+                if intervals is not None:
+                    speaker_map = _match_segments_to_speakers(segments, intervals)
+                    unique = len(set(speaker_map.values()))
+                    logger.log(f"Diarization complete. Detected {unique} speaker(s).")
+
+        total_wall = time.time() - start_time
+        logger.log("")
+        logger.log(f"Detected language: {info.language} (probability: {info.language_probability:.3f})")
+        logger.log(f"Number of segments: {len(segments)}")
+        logger.log(f"Total transcription time: {seconds_to_human(total_wall)}")
+        if duration_seconds and total_wall > 0:
+            logger.log(f"Overall speed: {duration_seconds / total_wall:.2f}x real-time")
+
+        base_output = input_path.with_suffix("")
+        txt_output = base_output.with_name(base_output.name + "_transcript.txt")
+        srt_output = base_output.with_name(base_output.name + "_subtitles.srt")
+
+        write_txt(txt_output, segments, speaker_map)
+        write_srt(srt_output, segments, speaker_map)
+
+        logger.log(f"Transcript written to: {txt_output}")
+        logger.log(f"Subtitles written to:  {srt_output}")
+        logger.done(True, "Transcription completed successfully.")
     finally:
-        if model is not None:
-            del model
-            model = None
-            gc.collect()
-
-    if cancelled:
-        logger.log("Transcription cancelled by user.")
-        logger.done(False, "cancelled")
-        return
-
-    speaker_map: dict[int, str] | None = None
-
-    if diarize:
-        if not hf_token:
-            logger.log("Diarization skipped: no HuggingFace token configured in Settings.")
-        elif not diarization_available():
-            logger.log("Diarization skipped: pyannote.audio not installed (pip install pyannote-audio).")
-        else:
-            logger.log("Running speaker diarization...")
-            intervals = run_diarization(input_path, hf_token, logger, stop_event)
-            if intervals is not None:
-                speaker_map = _match_segments_to_speakers(segments, intervals)
-                unique = len(set(speaker_map.values()))
-                logger.log(f"Diarization complete. Detected {unique} speaker(s).")
-
-    total_wall = time.time() - start_time
-    logger.log("")
-    logger.log(f"Detected language: {info.language} (probability: {info.language_probability:.3f})")
-    logger.log(f"Number of segments: {len(segments)}")
-    logger.log(f"Total transcription time: {seconds_to_human(total_wall)}")
-    if duration_seconds and total_wall > 0:
-        logger.log(f"Overall speed: {duration_seconds / total_wall:.2f}x real-time")
-
-    base_output = input_path.with_suffix("")
-    txt_output = base_output.with_name(base_output.name + "_transcript.txt")
-    srt_output = base_output.with_name(base_output.name + "_subtitles.srt")
-
-    write_txt(txt_output, segments, speaker_map)
-    write_srt(srt_output, segments, speaker_map)
-
-    logger.log(f"Transcript written to: {txt_output}")
-    logger.log(f"Subtitles written to:  {srt_output}")
-    logger.done(True, "Transcription completed successfully.")
+        _release_model(model, device_used, logger)
+        model = None
