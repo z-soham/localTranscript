@@ -321,70 +321,104 @@ class TranscriptApp:
     def _build_settings_tab(self) -> None:
         tab = ttk.Frame(self.notebook, padding=20)
         self.notebook.add(tab, text="  Settings  ")
-        tab.columnconfigure(1, weight=1)
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+
+        scroll = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        content = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.columnconfigure(1, weight=1)
+
+        def _on_content_configure(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_window, width=canvas.winfo_width())
+
+        content.bind("<Configure>", _on_content_configure)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+        canvas.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1 * (e.delta if e.delta > 0 else e.delta / 3)), "units"),
+        )
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+
+        def _on_frame_enter(_event):
+            canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta if e.delta > 0 else e.delta / 3)), "units"))
+
+        def _on_frame_leave(_event):
+            canvas.unbind_all("<MouseWheel>")
+
+        content.bind("<Enter>", _on_frame_enter)
+        content.bind("<Leave>", _on_frame_leave)
 
         r = 0
 
         # == Transcription ==
-        ttk.Label(tab, text="Transcription", font=("Segoe UI", 11, "bold")).grid(
+        ttk.Label(content, text="Transcription", font=("Segoe UI", 11, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w"
         )
         r += 1
-        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        ttk.Separator(content).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         r += 1
 
-        ttk.Label(tab, text="Whisper model:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        ttk.Label(content, text="Whisper model:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
         ttk.Combobox(
-            tab, textvariable=self.model_var, values=MODEL_OPTIONS, state="readonly", width=24
+            content, textvariable=self.model_var, values=MODEL_OPTIONS, state="readonly", width=24
         ).grid(row=r, column=1, sticky="w")
         r += 1
 
-        ttk.Label(tab, text="Preferred device:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        ttk.Label(content, text="Preferred device:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
         ttk.Combobox(
-            tab, textvariable=self.device_pref_var, values=["cuda", "cpu"], state="readonly", width=24
+            content, textvariable=self.device_pref_var, values=["cuda", "cpu"], state="readonly", width=24
         ).grid(row=r, column=1, sticky="w")
         r += 1
 
         # Spacer
-        ttk.Label(tab, text="").grid(row=r, column=0)
+        ttk.Label(content, text="").grid(row=r, column=0)
         r += 1
 
         # == LLM / Summarisation ==
-        ttk.Label(tab, text="LLM / Summarisation", font=("Segoe UI", 11, "bold")).grid(
+        ttk.Label(content, text="LLM / Summarisation", font=("Segoe UI", 11, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w"
         )
         r += 1
-        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        ttk.Separator(content).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         r += 1
 
-        ttk.Label(tab, text="API base URL:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
-        ttk.Entry(tab, textvariable=self.llm_url_var, width=54).grid(row=r, column=1, sticky="ew")
+        ttk.Label(content, text="API base URL:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        ttk.Entry(content, textvariable=self.llm_url_var, width=54).grid(row=r, column=1, sticky="ew")
         r += 1
         ttk.Label(
-            tab,
+            content,
             text="e.g.  https://openrouter.ai/api/v1   or   http://localhost:11434/v1  (Ollama)",
             foreground="#aaaaaa",
             font=("Segoe UI", 9),
         ).grid(row=r, column=1, sticky="w", pady=(0, 6))
         r += 1
 
-        ttk.Label(tab, text="API key:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
-        self._api_key_entry = ttk.Entry(tab, textvariable=self.llm_api_key_var, show="*", width=54)
+        ttk.Label(content, text="API key:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        self._api_key_entry = ttk.Entry(content, textvariable=self.llm_api_key_var, show="*", width=54)
         self._api_key_entry.grid(row=r, column=1, sticky="ew")
         r += 1
         ttk.Label(
-            tab,
+            content,
             text="Leave blank when not required (e.g. local Ollama without auth).",
             foreground="#aaaaaa",
             font=("Segoe UI", 9),
         ).grid(row=r, column=1, sticky="w", pady=(0, 6))
         r += 1
 
-        ttk.Label(tab, text="LLM model:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
-        ttk.Entry(tab, textvariable=self.llm_model_var, width=54).grid(row=r, column=1, sticky="ew")
+        ttk.Label(content, text="LLM model:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        ttk.Entry(content, textvariable=self.llm_model_var, width=54).grid(row=r, column=1, sticky="ew")
         r += 1
         ttk.Label(
-            tab,
+            content,
             text="e.g.  openai/gpt-4o-mini   or   llama3.2   or   mistral",
             foreground="#aaaaaa",
             font=("Segoe UI", 9),
@@ -398,33 +432,33 @@ class TranscriptApp:
             self._api_key_entry.configure(show="" if show_key_var.get() else "*")
 
         ttk.Checkbutton(
-            tab, text="Show API key", variable=show_key_var, command=_toggle_key_visibility
+            content, text="Show API key", variable=show_key_var, command=_toggle_key_visibility
         ).grid(row=r, column=1, sticky="w", pady=(0, 12))
         r += 1
 
         # Spacer
-        ttk.Label(tab, text="").grid(row=r, column=0)
+        ttk.Label(content, text="").grid(row=r, column=0)
         r += 1
 
         # == Speaker Diarization ==
-        ttk.Label(tab, text="Speaker Diarization", font=("Segoe UI", 11, "bold")).grid(
+        ttk.Label(content, text="Speaker Diarization", font=("Segoe UI", 11, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w"
         )
         r += 1
-        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        ttk.Separator(content).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         r += 1
 
         ttk.Checkbutton(
-            tab, text="Enable speaker diarization", variable=self.diarize_var
+            content, text="Enable speaker diarization", variable=self.diarize_var
         ).grid(row=r, column=0, columnspan=2, sticky="w", pady=5)
         r += 1
 
-        ttk.Label(tab, text="HuggingFace token:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
-        self._hf_token_entry = ttk.Entry(tab, textvariable=self.hf_token_var, show="*", width=54)
+        ttk.Label(content, text="HuggingFace token:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        self._hf_token_entry = ttk.Entry(content, textvariable=self.hf_token_var, show="*", width=54)
         self._hf_token_entry.grid(row=r, column=1, sticky="ew")
         r += 1
         ttk.Label(
-            tab,
+            content,
             text="Required once to download model from HuggingFace. Inference is fully offline after that.",
             foreground="#aaaaaa",
             font=("Segoe UI", 9),
@@ -437,27 +471,27 @@ class TranscriptApp:
             self._hf_token_entry.configure(show="" if show_hf_var.get() else "*")
 
         ttk.Checkbutton(
-            tab, text="Show token", variable=show_hf_var, command=_toggle_hf_visibility
+            content, text="Show token", variable=show_hf_var, command=_toggle_hf_visibility
         ).grid(row=r, column=1, sticky="w", pady=(0, 12))
         r += 1
 
         # Spacer
-        ttk.Label(tab, text="").grid(row=r, column=0)
+        ttk.Label(content, text="").grid(row=r, column=0)
         r += 1
 
         # == Prompts ==
-        ttk.Label(tab, text="Prompts", font=("Segoe UI", 11, "bold")).grid(
+        ttk.Label(content, text="Prompts", font=("Segoe UI", 11, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w"
         )
         r += 1
-        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        ttk.Separator(content).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 8))
         r += 1
 
-        self._build_prompt_section(tab, r)
+        self._build_prompt_section(content, r)
         r += 1
 
         # Save row
-        save_row = ttk.Frame(tab)
+        save_row = ttk.Frame(content)
         save_row.grid(row=r, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         ttk.Button(save_row, text="Save Settings", command=self._save_settings).grid(row=0, column=0, padx=(0, 14))
