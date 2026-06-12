@@ -350,9 +350,13 @@ class TranscriptApp:
 
         def _on_frame_enter(_event):
             canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta if e.delta > 0 else e.delta / 3)), "units"))
+            canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+            canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
         def _on_frame_leave(_event):
             canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
 
         content.bind("<Enter>", _on_frame_enter)
         content.bind("<Leave>", _on_frame_leave)
