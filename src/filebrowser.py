@@ -96,7 +96,7 @@ class FileBrowserDialog:
         tree_frame.columnconfigure(0, weight=1)
         tree_frame.rowconfigure(0, weight=1)
 
-        columns = ("size", "type", "modified")
+        columns = ("name", "size", "type", "modified")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
 
         self.tree.heading("name", text="Name", command=lambda c="name": self._on_header_click(c))
