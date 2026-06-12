@@ -19,7 +19,14 @@ except ImportError:
 from src.constants import APP_TITLE, MODEL_OPTIONS
 from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
 from src.settings_manager import load_settings, save_settings
-from src.summarizer import SUMMARY_MODES, summarize_transcript
+from src.summarizer import (
+    DEFAULT_GENERAL_PROMPT,
+    DEFAULT_GENERAL_SYSTEM_MSG,
+    DEFAULT_MEETING_PROMPT,
+    DEFAULT_MEETING_SYSTEM_MSG,
+    SUMMARY_MODES,
+    summarize_transcript,
+)
 from src.transcriber import WhisperModel, transcribe_file
 from src.utils import seconds_to_human
 from src.youtube import YT_DLP_AVAILABLE, download_youtube_audio
@@ -46,6 +53,11 @@ class TranscriptApp:
         self.llm_model_var = tk.StringVar(value=_s["llm_model"])
         self.diarize_var = tk.BooleanVar(value=_s["diarize_enabled"])
         self.hf_token_var = tk.StringVar(value=_s["hf_token"])
+        self.meeting_sys_msg_var = tk.StringVar(value=_s.get("meeting_system_msg", DEFAULT_MEETING_SYSTEM_MSG))
+        self.meeting_prompt_var = tk.StringVar(value=_s.get("meeting_prompt", DEFAULT_MEETING_PROMPT))
+        self.general_sys_msg_var = tk.StringVar(value=_s.get("general_system_msg", DEFAULT_GENERAL_SYSTEM_MSG))
+        self.general_prompt_var = tk.StringVar(value=_s.get("general_prompt", DEFAULT_GENERAL_PROMPT))
+        self._browser_last_dir = _s.get("last_browser_dir", str(Path.home()))
 
         # Transcription-tab state
         self.file_path_var = tk.StringVar()
@@ -429,6 +441,21 @@ class TranscriptApp:
         ).grid(row=r, column=1, sticky="w", pady=(0, 12))
         r += 1
 
+        # Spacer
+        ttk.Label(tab, text="").grid(row=r, column=0)
+        r += 1
+
+        # == Prompts ==
+        ttk.Label(tab, text="Prompts", font=("Segoe UI", 11, "bold")).grid(
+            row=r, column=0, columnspan=2, sticky="w"
+        )
+        r += 1
+        ttk.Separator(tab).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        r += 1
+
+        self._build_prompt_section(tab, r)
+        r += 1
+
         # Save row
         save_row = ttk.Frame(tab)
         save_row.grid(row=r, column=0, columnspan=2, sticky="w", pady=(4, 0))
@@ -437,7 +464,78 @@ class TranscriptApp:
         self._settings_status = ttk.Label(save_row, text="", foreground="#4caf50")
         self._settings_status.grid(row=0, column=1)
 
+    def _build_prompt_section(self, parent, start_row: int) -> None:
+        r = start_row
+        prompt_notebook = ttk.Notebook(parent)
+        prompt_notebook.grid(row=r, column=0, columnspan=2, sticky="nsew", pady=(4, 0))
+
+        self._build_prompt_tab(
+            prompt_notebook, "Meeting",
+            self.meeting_sys_msg_var, self.meeting_prompt_var,
+            DEFAULT_MEETING_SYSTEM_MSG, DEFAULT_MEETING_PROMPT,
+        )
+        self._build_prompt_tab(
+            prompt_notebook, "General Video",
+            self.general_sys_msg_var, self.general_prompt_var,
+            DEFAULT_GENERAL_SYSTEM_MSG, DEFAULT_GENERAL_PROMPT,
+        )
+
+    def _build_prompt_tab(self, notebook, title: str, sys_msg_var: tk.StringVar, prompt_var: tk.StringVar, default_sys_msg: str, default_prompt: str) -> None:
+        tab = ttk.Frame(notebook, padding=10)
+        tab.pack(fill="both", expand=True)
+        notebook.add(tab, text=f"  {title}  ")
+
+        ttk.Label(tab, text="System Message:").grid(row=0, column=0, sticky="nw", padx=(0, 8), pady=(0, 4))
+        sys_entry = ttk.Entry(tab, textvariable=sys_msg_var, width=60)
+        sys_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+        ttk.Label(tab, text="Prompt Template:").grid(row=2, column=0, sticky="nw", padx=(0, 8), pady=(0, 4))
+        ttk.Label(tab, text="Use {transcript} as the placeholder for transcript text.", foreground="#aaaaaa", font=("Segoe UI", 9)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        text_frame = ttk.Frame(tab)
+        text_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+
+        sb = ttk.Scrollbar(text_frame, orient="vertical")
+        sb.grid(row=0, column=1, sticky="ns")
+        prompt_text = tk.Text(text_frame, wrap="word", yscrollcommand=sb.set, height=12, width=70, font=("Consolas", 9))
+        prompt_text.grid(row=0, column=0, sticky="nsew")
+        sb.config(command=prompt_text.yview)
+
+        _prompt_var = prompt_var
+        _text_widget = prompt_text
+
+        def _sync_text_to_var():
+            _prompt_var.set(_text_widget.get("1.0", "end-1c"))
+
+        def _sync_var_to_text():
+            _text_widget.delete("1.0", "end")
+            _text_widget.insert("1.0", _prompt_var.get())
+
+        _sync_var_to_text()
+        prompt_text.bind("<FocusOut>", lambda e: _sync_text_to_var())
+
+        btn_row = ttk.Frame(tab)
+        btn_row.grid(row=5, column=0, columnspan=2, sticky="w")
+
+        _sys_msg_var = sys_msg_var
+        _reset_default_sys_msg = default_sys_msg
+        _reset_default_prompt = default_prompt
+
+        def _reset():
+            _sys_msg_var.set(_reset_default_sys_msg)
+            _prompt_var.set(_reset_default_prompt)
+            _sync_var_to_text()
+
+        ttk.Button(btn_row, text="Reset to Default", command=_reset).grid(row=0, column=0)
+
     def _save_settings(self) -> None:
+        for label, var in [("Meeting prompt", self.meeting_prompt_var), ("General Video prompt", self.general_prompt_var)]:
+            if "{transcript}" not in var.get():
+                messagebox.showwarning(APP_TITLE, f"{label} is missing the {{transcript}} placeholder. It will not work correctly.")
+                return
+
         save_settings(
             {
                 "model": self.model_var.get(),
@@ -447,6 +545,11 @@ class TranscriptApp:
                 "llm_model": self.llm_model_var.get().strip(),
                 "diarize_enabled": self.diarize_var.get(),
                 "hf_token": self.hf_token_var.get(),
+                "meeting_system_msg": self.meeting_sys_msg_var.get(),
+                "meeting_prompt": self.meeting_prompt_var.get(),
+                "general_system_msg": self.general_sys_msg_var.get(),
+                "general_prompt": self.general_prompt_var.get(),
+                "last_browser_dir": self._browser_last_dir,
             }
         )
         self._settings_status.configure(text="Settings saved.")
@@ -492,16 +595,19 @@ class TranscriptApp:
             self.status_var.set("Ready")
 
     def browse_file(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select media file",
+        from src.filebrowser import FileBrowserDialog
+        dialog = FileBrowserDialog(
+            self.root,
+            title="Select Media File",
             filetypes=[
-                ("Media files", "*.mp4 *.mkv *.mov *.avi *.webm *.mp3 *.wav *.m4a *.flac"),
-                ("All files", "*.*"),
+                ("Media files", [".mp4", ".mkv", ".mov", ".avi", ".webm", ".mp3", ".wav", ".m4a", ".flac"]),
             ],
+            initial_dir=self._browser_last_dir,
         )
-        if path:
-            self.file_path_var.set(path)
-            self._log(f"Selected file: {path}")
+        if dialog.result:
+            self.file_path_var.set(dialog.result)
+            self._browser_last_dir = str(Path(dialog.result).parent)
+            self._log(f"Selected file: {dialog.result}")
 
     def clear_file(self) -> None:
         self.file_path_var.set("")
@@ -721,17 +827,18 @@ class TranscriptApp:
     # ------------------------------------------------------------------
 
     def browse_summary_file(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select transcript file",
+        from src.filebrowser import FileBrowserDialog
+        dialog = FileBrowserDialog(
+            self.root,
+            title="Select Transcript File",
             filetypes=[
-                ("Transcript files", "*.txt *.srt"),
-                ("Text files", "*.txt"),
-                ("SRT files", "*.srt"),
-                ("All files", "*.*"),
+                ("Transcript files", [".txt", ".srt"]),
             ],
+            initial_dir=self._browser_last_dir,
         )
-        if path:
-            self.summary_file_var.set(path)
+        if dialog.result:
+            self.summary_file_var.set(dialog.result)
+            self._browser_last_dir = str(Path(dialog.result).parent)
 
     def start_summarisation(self) -> None:
         raw = self.summary_file_var.get().strip()
@@ -754,6 +861,10 @@ class TranscriptApp:
 
         api_key = self.llm_api_key_var.get()
         mode = self.summary_mode_var.get()
+        meeting_sys_msg = self.meeting_sys_msg_var.get()
+        meeting_p = self.meeting_prompt_var.get()
+        general_sys_msg = self.general_sys_msg_var.get()
+        general_p = self.general_prompt_var.get()
 
         self.summarise_btn.configure(state="disabled")
         self.save_summary_btn.configure(state="disabled")
@@ -765,7 +876,10 @@ class TranscriptApp:
 
         def worker() -> None:
             try:
-                result = summarize_transcript(input_path, llm_url, api_key, llm_model, mode)
+                result = summarize_transcript(
+                    input_path, llm_url, api_key, llm_model, mode,
+                    meeting_sys_msg, meeting_p, general_sys_msg, general_p,
+                )
                 self.root.after(0, lambda: self._on_summary_done(result, None))
             except Exception as exc:
                 err = str(exc)
