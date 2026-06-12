@@ -324,7 +324,7 @@ class TranscriptApp:
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(tab, highlightthickness=0)
+        canvas = tk.Canvas(tab, highlightthickness=0, bg=self.root.cget("bg"))
         canvas.grid(row=0, column=0, sticky="nsew")
 
         scroll = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
