@@ -39,6 +39,7 @@ class FileBrowserDialog:
         self.dialog.minsize(600, 350)
         self.dialog.transient(parent)
         self.dialog.grab_set()
+        self.dialog.configure(bg="#1e1e1e")
 
         self._current_dir = Path(initial_dir) if initial_dir else Path.home()
 
@@ -97,7 +98,20 @@ class FileBrowserDialog:
         tree_frame.rowconfigure(0, weight=1)
 
         columns = ("name", "size", "type", "modified")
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
+        style = ttk.Style()
+        style.configure(
+            "FileBrowser.Treeview",
+            background="#2d2d2d", foreground="#e0e0e0", fieldbackground="#2d2d2d",
+            bordercolor="#505050",
+        )
+        style.configure(
+            "FileBrowser.Treeview.Header",
+            background="#3c3c3c", foreground="#e0e0e0", bordercolor="#505050",
+        )
+        style.map("FileBrowser.Treeview",
+                  background=[("selected", "#264f78")],
+                  foreground=[("selected", "#e0e0e0")])
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse", style="FileBrowser.Treeview")
 
         self.tree.heading("name", text="Name", command=lambda c="name": self._on_header_click(c))
         self.tree.heading("size", text="Size", command=lambda c="size": self._on_header_click(c))

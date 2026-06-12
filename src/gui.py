@@ -537,7 +537,8 @@ class TranscriptApp:
 
         sb = ttk.Scrollbar(text_frame, orient="vertical")
         sb.grid(row=0, column=1, sticky="ns")
-        prompt_text = tk.Text(text_frame, wrap="word", yscrollcommand=sb.set, height=12, width=70, font=("Consolas", 9))
+        prompt_text = tk.Text(text_frame, wrap="word", yscrollcommand=sb.set, height=12, width=70, font=("Consolas", 9),
+                                bg="#2d2d2d", fg="#e0e0e0", insertbackground="#e0e0e0", selectbackground="#264f78")
         prompt_text.grid(row=0, column=0, sticky="nsew")
         sb.config(command=prompt_text.yview)
 
