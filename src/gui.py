@@ -538,7 +538,7 @@ class TranscriptApp:
         sb = ttk.Scrollbar(text_frame, orient="vertical")
         sb.grid(row=0, column=1, sticky="ns")
         prompt_text = tk.Text(text_frame, wrap="word", yscrollcommand=sb.set, height=12, width=70, font=("Consolas", 9),
-                                bg="#2d2d2d", fg="#e0e0e0", insertbackground="#e0e0e0", selectbackground="#264f78")
+                                bg="#2d2d2d", fg="#e0e0e0", insertbackground="#e0e0e0", insertwidth=1, selectbackground="#264f78")
         prompt_text.grid(row=0, column=0, sticky="nsew")
         sb.config(command=prompt_text.yview)
 
@@ -572,7 +572,7 @@ class TranscriptApp:
     def _save_settings(self) -> None:
         for label, var in [("Meeting prompt", self.meeting_prompt_var), ("General Video prompt", self.general_prompt_var)]:
             if "{transcript}" not in var.get():
-                messagebox.showwarning(APP_TITLE, f"{label} is missing the {{transcript}} placeholder. It will not work correctly.")
+                _show_dialog(self.root, APP_TITLE, f"{label} is missing the {{transcript}} placeholder. It will not work correctly.", "warning")
                 return
 
         save_settings(
@@ -685,14 +685,14 @@ class TranscriptApp:
     def open_output_folder(self) -> None:
         raw = self.file_path_var.get().strip()
         if not raw:
-            messagebox.showinfo(APP_TITLE, "Select a file first.")
+            _show_dialog(self.root, APP_TITLE, "Select a file first.")
             return
         p = Path(raw)
         folder = p.parent if p.exists() else Path.cwd()
         try:
             os.startfile(str(folder))  # type: ignore[attr-defined]
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"Could not open folder:\n{exc}")
+            _show_dialog(self.root, APP_TITLE, f"Could not open folder:\n{exc}", "error")
 
     def stop_transcription(self) -> None:
         self._stop_event.set()
@@ -702,25 +702,25 @@ class TranscriptApp:
 
     def start_transcription(self) -> None:
         if self.worker_thread and self.worker_thread.is_alive():
-            messagebox.showinfo(APP_TITLE, "A transcription is already running.")
+            _show_dialog(self.root, APP_TITLE, "A transcription is already running.")
             return
 
         raw_input = self.file_path_var.get().strip()
 
         if not raw_input:
-            messagebox.showwarning(APP_TITLE, "Please select a media file or enter a YouTube URL first.")
+            _show_dialog(self.root, APP_TITLE, "Please select a media file or enter a YouTube URL first.", "warning")
             return
 
         use_youtube = self._is_youtube_url(raw_input)
 
         if use_youtube and not YT_DLP_AVAILABLE:
-            messagebox.showerror(APP_TITLE, "yt-dlp is not installed.\nRun: pip install yt-dlp")
+            _show_dialog(self.root, APP_TITLE, "yt-dlp is not installed.\nRun: pip install yt-dlp", "error")
             return
 
         if not use_youtube:
             input_path = Path(raw_input)
             if not input_path.exists():
-                messagebox.showerror(APP_TITLE, f"File not found:\n{input_path}")
+                _show_dialog(self.root, APP_TITLE, f"File not found:\n{input_path}", "error")
                 return
 
         self._stop_event.clear()
@@ -847,19 +847,16 @@ class TranscriptApp:
             self.progress_text_var.set("Completed")
             self._log(message)
             self._log(f"Log saved to: {self.session_log_path}")
-            messagebox.showinfo(APP_TITLE, f"{message}\nLog file:\n{self.session_log_path}")
+            _show_dialog(self.root, APP_TITLE, f"{message}\nLog file:\n{self.session_log_path}")
         elif message == "cancelled":
             self.progress_text_var.set("Cancelled")
             self._log(f"Log saved to: {self.session_log_path}")
-            messagebox.showinfo(APP_TITLE, "Transcription was stopped.")
+            _show_dialog(self.root, APP_TITLE, "Transcription was stopped.")
         else:
             self.progress_text_var.set("Failed")
             self._log(f"Failed: {message}")
             self._log(f"Detailed log: {self.session_log_path}")
-            messagebox.showerror(
-                APP_TITLE,
-                f"Transcription failed:\n{message}\nDetailed log:\n{self.session_log_path}",
-            )
+            _show_dialog(self.root, APP_TITLE, f"Transcription failed:\n{message}\nDetailed log:\n{self.session_log_path}", "error")
 
     # ------------------------------------------------------------------
     # Summarisation helpers
@@ -882,20 +879,18 @@ class TranscriptApp:
     def start_summarisation(self) -> None:
         raw = self.summary_file_var.get().strip()
         if not raw:
-            messagebox.showwarning(APP_TITLE, "Please select a transcript file first.")
+            _show_dialog(self.root, APP_TITLE, "Please select a transcript file first.", "warning")
             return
 
         input_path = Path(raw)
         if not input_path.exists():
-            messagebox.showerror(APP_TITLE, f"File not found:\n{input_path}")
+            _show_dialog(self.root, APP_TITLE, f"File not found:\n{input_path}", "error")
             return
 
         llm_url = self.llm_url_var.get().strip()
         llm_model = self.llm_model_var.get().strip()
         if not llm_url or not llm_model:
-            messagebox.showwarning(
-                APP_TITLE, "Please configure LLM URL and model name in the Settings tab first."
-            )
+            _show_dialog(self.root, APP_TITLE, "Please configure LLM URL and model name in the Settings tab first.", "warning")
             return
 
         api_key = self.llm_api_key_var.get()
@@ -934,7 +929,7 @@ class TranscriptApp:
         if error:
             self.summary_status_var.set("Summarisation failed.")
             self.summary_output.insert("end", f"Error:\n{error}")
-            messagebox.showerror(APP_TITLE, f"Summarisation failed:\n{error}")
+            _show_dialog(self.root, APP_TITLE, f"Summarisation failed:\n{error}", "error")
         else:
             self.summary_status_var.set("Summary generated successfully.")
             self.summary_output.insert("end", result)
@@ -960,7 +955,49 @@ class TranscriptApp:
         )
         if save_path:
             Path(save_path).write_text(content, encoding="utf-8")
-            messagebox.showinfo(APP_TITLE, f"Summary saved to:\n{save_path}")
+            _show_dialog(self.root, APP_TITLE, f"Summary saved to:\n{save_path}")
+
+
+# ------------------------------------------------------------------
+# Custom dialog with selectable text
+# ------------------------------------------------------------------
+
+def _show_dialog(parent: tk.Tk, title: str, message: str, icon: str = "info") -> None:
+    """Show a modal dialog with selectable text, matching dark theme."""
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.transient(parent)
+    dlg.grab_set()
+    dlg.configure(bg="#1e1e1e")
+    dlg.resizable(False, False)
+
+    icon_map = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}
+    icon_char = icon_map.get(icon, "ℹ️")
+
+    icon_label = ttk.Label(dlg, text=icon_char, font=("Segoe UI", 24))
+    icon_label.grid(row=0, column=0, padx=(20, 12), pady=(20, 0), sticky="w")
+
+    text_frame = ttk.Frame(dlg)
+    text_frame.grid(row=0, column=1, columnspan=1, sticky="nsew", padx=(0, 20), pady=(20, 12))
+    text_frame.columnconfigure(0, weight=1)
+    text_frame.rowconfigure(0, weight=1)
+
+    text = tk.Text(text_frame, wrap="word", bg="#2d2d2d", fg="#e0e0e0", font=("Consolas", 10),
+                    state="disabled", borderwidth=0, highlightthickness=0, padx=4)
+    text.grid(row=0, column=0, sticky="nsew")
+    text.configure(state="normal")
+    text.insert("1.0", message)
+    text.configure(state="disabled")
+
+    btn_frame = ttk.Frame(dlg, padding=(0, 12, 20, 16))
+    btn_frame.grid(row=1, column=0, columnspan=2, sticky="e")
+    ttk.Button(btn_frame, text="OK", width=8, command=dlg.destroy).grid(row=0, column=0)
+
+    dlg.update_idletasks()
+    x = parent.winfo_x() + (parent.winfo_width() - dlg.winfo_width()) // 2
+    y = parent.winfo_y() + (parent.winfo_height() - dlg.winfo_height()) // 2
+    dlg.geometry(f"+{x}+{y}")
+    dlg.wait_window()
 
 
 # ------------------------------------------------------------------
@@ -1076,10 +1113,7 @@ def main() -> None:
     except Exception as exc:
         LOGGER.exception("Fatal application startup failure")
         try:
-            messagebox.showerror(
-                APP_TITLE,
-                f"Application startup failed:\n{exc}\nLog file:\n{SESSION_LOG_PATH}",
-            )
+            _show_dialog(root, APP_TITLE, f"Application startup failed:\n{exc}\nLog file:\n{SESSION_LOG_PATH}", "error")
         except Exception:
             pass
         raise
