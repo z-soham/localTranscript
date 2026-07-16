@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from src.constants import LOG_DIR
+from src.constants import DEFAULT_OUTPUT_DIR, LOG_DIR
 from src.summarizer import (
     DEFAULT_GENERAL_PROMPT,
     DEFAULT_GENERAL_SYSTEM_MSG,
@@ -25,6 +25,7 @@ DEFAULT_SETTINGS: dict = {
     "general_system_msg": DEFAULT_GENERAL_SYSTEM_MSG,
     "general_prompt": DEFAULT_GENERAL_PROMPT,
     "last_browser_dir": str(Path.home()),
+    "output_dir": str(DEFAULT_OUTPUT_DIR),
 }
 
 

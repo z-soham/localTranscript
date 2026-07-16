@@ -16,7 +16,7 @@ except ImportError:
     DND_FILES = None
     TkinterDnD = None
 
-from src.constants import APP_TITLE, MODEL_OPTIONS
+from src.constants import APP_TITLE, DEFAULT_OUTPUT_DIR, MODEL_OPTIONS
 from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
 from src.settings_manager import load_settings, save_settings
 from src.summarizer import (
@@ -58,6 +58,7 @@ class TranscriptApp:
         self.general_sys_msg_var = tk.StringVar(value=_s.get("general_system_msg", DEFAULT_GENERAL_SYSTEM_MSG))
         self.general_prompt_var = tk.StringVar(value=_s.get("general_prompt", DEFAULT_GENERAL_PROMPT))
         self._browser_last_dir = _s.get("last_browser_dir", str(Path.home()))
+        self.output_dir_var = tk.StringVar(value=_s.get("output_dir", str(DEFAULT_OUTPUT_DIR)))
 
         # Transcription-tab state
         self.file_path_var = tk.StringVar()
@@ -348,19 +349,6 @@ class TranscriptApp:
         canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
         canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
-        def _on_frame_enter(_event):
-            canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta if e.delta > 0 else e.delta / 3)), "units"))
-            canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-            canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-
-        def _on_frame_leave(_event):
-            canvas.unbind_all("<MouseWheel>")
-            canvas.unbind_all("<Button-4>")
-            canvas.unbind_all("<Button-5>")
-
-        content.bind("<Enter>", _on_frame_enter)
-        content.bind("<Leave>", _on_frame_leave)
-
         r = 0
 
         # == Transcription ==
@@ -381,6 +369,15 @@ class TranscriptApp:
         ttk.Combobox(
             content, textvariable=self.device_pref_var, values=["cuda", "cpu"], state="readonly", width=24
         ).grid(row=r, column=1, sticky="w")
+        r += 1
+
+        # Output directory
+        ttk.Label(content, text="Output directory:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=(5, 0))
+        out_dir_frame = ttk.Frame(content)
+        out_dir_frame.grid(row=r, column=1, sticky="w", pady=(5, 0))
+        out_dir_frame.columnconfigure(0, weight=1)
+        ttk.Entry(out_dir_frame, textvariable=self.output_dir_var, width=42).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Button(out_dir_frame, text="Browse", command=self._browse_output_dir, width=8).grid(row=0, column=1)
         r += 1
 
         # Spacer
@@ -589,6 +586,7 @@ class TranscriptApp:
                 "general_system_msg": self.general_sys_msg_var.get(),
                 "general_prompt": self.general_prompt_var.get(),
                 "last_browser_dir": self._browser_last_dir,
+                "output_dir": self.output_dir_var.get(),
             }
         )
         self._settings_status.configure(text="Settings saved.")
@@ -648,6 +646,13 @@ class TranscriptApp:
             self._browser_last_dir = str(Path(dialog.result).parent)
             self._log(f"Selected file: {dialog.result}")
 
+    def _browse_output_dir(self) -> None:
+        chosen = filedialog.askdirectory(
+            parent=self.root, title="Select Output Directory", initialdir=self.output_dir_var.get()
+        )
+        if chosen:
+            self.output_dir_var.set(chosen)
+
     def clear_file(self) -> None:
         self.file_path_var.set("")
         self.progress["value"] = 0
@@ -683,12 +688,9 @@ class TranscriptApp:
             self.summary_file_var.set(self._normalize_drop_path(paths[0]))
 
     def open_output_folder(self) -> None:
-        raw = self.file_path_var.get().strip()
-        if not raw:
-            _show_dialog(self.root, APP_TITLE, "Select a file first.")
-            return
-        p = Path(raw)
-        folder = p.parent if p.exists() else Path.cwd()
+        folder = Path(self.output_dir_var.get())
+        if not folder.exists():
+            folder.mkdir(parents=True, exist_ok=True)
         try:
             os.startfile(str(folder))  # type: ignore[attr-defined]
         except Exception as exc:
@@ -734,6 +736,7 @@ class TranscriptApp:
 
         model_name = self.model_var.get().strip() or "large-v3"
         prefer_cuda = self.device_pref_var.get().strip().lower() == "cuda"
+        output_dir = Path(self.output_dir_var.get())
 
         self._log("=" * 72)
 
@@ -758,6 +761,7 @@ class TranscriptApp:
                         downloaded_path, model_name, prefer_cuda, logger, stop_event,
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
+                        output_dir=output_dir,
                     )
                 except BaseException as exc:
                     if stop_event.is_set():
@@ -788,6 +792,7 @@ class TranscriptApp:
                         input_path, model_name, prefer_cuda, logger, stop_event,
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
+                        output_dir=output_dir,
                     )
                 except BaseException as exc:
                     logger.log("Error during transcription:")
@@ -1032,9 +1037,6 @@ def _setup_dark_theme(root: tk.Tk) -> None:
                     selectbackground=SELECT_BG, selectforeground=FG,
                     insertcolor=FG)
 
-    style.configure("TFrame", background=BG)
-    style.configure("TLabel", background=BG, foreground=FG)
-
     style.configure("TButton",
                     background=BG3, foreground=FG, bordercolor=BORDER,
                     focusthickness=0, padding=(8, 4))
@@ -1042,25 +1044,6 @@ def _setup_dark_theme(root: tk.Tk) -> None:
               background=[("active", "#505050"), ("pressed", "#404040"), ("disabled", BG2)],
               foreground=[("disabled", "#666666")])
 
-    style.configure("TEntry",
-                    fieldbackground=BG2, foreground=FG, bordercolor=BORDER,
-                    insertcolor=FG, selectbackground=SELECT_BG)
-    style.map("TEntry",
-              fieldbackground=[("disabled", BG2), ("readonly", BG2)],
-              foreground=[("disabled", "#666666")])
-
-    style.configure("TCombobox",
-                    fieldbackground=BG2, background=BG3, foreground=FG,
-                    bordercolor=BORDER, arrowcolor=FG,
-                    selectbackground=SELECT_BG, selectforeground=FG)
-    style.map("TCombobox",
-              fieldbackground=[("readonly", BG2), ("disabled", BG2)],
-              foreground=[("readonly", FG), ("disabled", "#666666")],
-              selectbackground=[("readonly", BG2)],
-              selectforeground=[("readonly", FG)],
-              arrowcolor=[("disabled", "#666666")])
-
-    style.configure("TNotebook", background=BG, bordercolor=BORDER, tabmargins=(2, 5, 2, 0))
     style.configure("TNotebook.Tab",
                     background=BG2, foreground=FG_DIM, padding=(12, 6),
                     bordercolor=BORDER)

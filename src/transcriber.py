@@ -59,6 +59,7 @@ def transcribe_file(
     *,
     diarize: bool = False,
     hf_token: str = "",
+    output_dir: Path | None = None,
 ) -> None:
     if WhisperModel is None:
         raise TranscriptionError(
@@ -213,9 +214,15 @@ def transcribe_file(
         if duration_seconds and total_wall > 0:
             logger.log(f"Overall speed: {duration_seconds / total_wall:.2f}x real-time")
 
-        base_output = input_path.with_suffix("")
-        txt_output = base_output.with_name(base_output.name + "_transcript.txt")
-        srt_output = base_output.with_name(base_output.name + "_subtitles.srt")
+        base_name = input_path.with_suffix("").name
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            txt_output = output_dir / (base_name + "_transcript.txt")
+            srt_output = output_dir / (base_name + "_subtitles.srt")
+        else:
+            base_output = input_path.with_suffix("")
+            txt_output = base_output.with_name(base_output.name + "_transcript.txt")
+            srt_output = base_output.with_name(base_output.name + "_subtitles.srt")
 
         write_txt(txt_output, segments, speaker_map)
         write_srt(srt_output, segments, speaker_map)

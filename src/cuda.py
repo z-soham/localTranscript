@@ -4,28 +4,31 @@ from pathlib import Path
 
 from src.logging_setup import QueueLogger
 
+_CUDNN_BIN = [
+    Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
+    Path(sys.base_prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
+]
+
+_CUDA_LIB = [
+    Path(sys.prefix) / "Library" / "bin",
+    Path(sys.base_prefix) / "Library" / "bin",
+]
+
 
 def locate_cudnn_hint() -> str | None:
-    candidates = [
-        Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
-        Path(sys.base_prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
-    ]
-    for candidate in candidates:
+    if sys.platform != "win32":
+        return None
+    for candidate in _CUDNN_BIN:
         if (candidate / "cudnn_ops64_9.dll").exists():
             return str(candidate)
     return None
 
 
 def preload_cuda_paths(logger: QueueLogger) -> None:
+    if sys.platform != "win32":
+        return
     cuda_path_entries = []
-    candidate_dirs = [
-        Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
-        Path(sys.base_prefix) / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin",
-        Path(sys.prefix) / "Library" / "bin",
-        Path(sys.base_prefix) / "Library" / "bin",
-    ]
-
-    for candidate in candidate_dirs:
+    for candidate in _CUDNN_BIN + _CUDA_LIB:
         if candidate.exists():
             cuda_path_entries.append(str(candidate))
             try:
