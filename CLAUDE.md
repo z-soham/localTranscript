@@ -20,7 +20,7 @@ pip install .           # core: faster-whisper, tkinterdnd2, yt-dlp, pyannote-au
 - `tkinterdnd2` — optional, drag-and-drop file input
 - `yt-dlp` — optional, YouTube URL audio download (requires FFmpeg for MP3 conversion)
 - `pyannote-audio` — optional, multi-speaker diarization (requires a HuggingFace token; video files need FFmpeg WAV conversion first)
-- `onnx-asr` (`onnx-asr[cpu,hub]`) — optional, alternative "Parakeet" ASR engine (NVIDIA Parakeet TDT via ONNX Runtime); faster than faster-whisper on CPU, English-only
+- `onnx-asr` (`onnx-asr[gpu,hub]`) — optional, alternative "Parakeet" ASR engine (NVIDIA Parakeet TDT via ONNX Runtime); faster than faster-whisper on CPU, English-only. The `gpu` extra pulls in `onnxruntime-gpu` so `CUDAExecutionProvider` is actually registered — the `cpu` extra silently caps this engine to CPU regardless of the device setting.
 - `ffprobe`/`ffmpeg` (system-level, not pip) — optional, used for media duration/ETA and required by YouTube download, diarization of video files, and the Parakeet engine (any non-WAV input)
 
 Code uses `X | Y` union syntax, which requires **Python 3.10+** despite `pyproject.toml` declaring `>=3.9`.

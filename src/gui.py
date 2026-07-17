@@ -754,7 +754,9 @@ class TranscriptApp:
         if use_youtube:
             url = raw_input
             self._log(f"YouTube URL: {url}")
-            self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
+            engine = self.engine_var.get()
+            engine_label = "parakeet" if engine == "parakeet" else model_name
+            self._log(f"Model: {engine_label} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 
             def worker() -> None:
                 downloaded_path: Path | None = None
@@ -793,7 +795,9 @@ class TranscriptApp:
         else:
             input_path = Path(raw_input)
             self._log(f"Starting transcription: {input_path}")
-            self._log(f"Model: {model_name} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
+            engine = self.engine_var.get()
+            engine_label = "parakeet" if engine == "parakeet" else model_name
+            self._log(f"Model: {engine_label} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 
             def worker() -> None:  # type: ignore[misc]
                 try:
