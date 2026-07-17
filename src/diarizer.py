@@ -1,9 +1,8 @@
 import importlib.util
-import os
-import subprocess
-import tempfile
 import threading
 from pathlib import Path
+
+from src.utils import convert_to_wav16k_mono
 
 # Video extensions that need WAV conversion before pyannote can process them
 _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
@@ -50,17 +49,7 @@ def run_diarization(
     input_for_pyannote = audio_path
     if audio_path.suffix.lower() in _VIDEO_EXTENSIONS:
         try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".wav")
-            os.close(fd)
-            tmp_wav = Path(tmp_path)
-            result = subprocess.run(
-                ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "16000", "-ac", "1", str(tmp_wav)],
-                capture_output=True,
-            )
-            if result.returncode != 0:
-                logger.log("Diarization skipped: ffmpeg WAV conversion failed.")
-                tmp_wav.unlink(missing_ok=True)
-                return None
+            tmp_wav = convert_to_wav16k_mono(audio_path)
             input_for_pyannote = tmp_wav
         except Exception as e:
             logger.log(f"Diarization skipped: WAV conversion error: {e}")

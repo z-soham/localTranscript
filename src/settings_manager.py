@@ -13,6 +13,7 @@ from src.summarizer import (
 SETTINGS_FILE = LOG_DIR / "settings.json"
 
 DEFAULT_SETTINGS: dict = {
+    "engine": "faster-whisper",
     "model": "large-v3",
     "device": "cuda",
     "llm_url": "https://openrouter.ai/api/v1",

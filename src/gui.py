@@ -16,7 +16,7 @@ except ImportError:
     DND_FILES = None
     TkinterDnD = None
 
-from src.constants import APP_TITLE, DEFAULT_OUTPUT_DIR, MODEL_OPTIONS
+from src.constants import APP_TITLE, DEFAULT_OUTPUT_DIR, ENGINE_OPTIONS, MODEL_OPTIONS
 from src.logging_setup import LOGGER, SESSION_LOG_PATH, QueueLogger
 from src.settings_manager import load_settings, save_settings
 from src.summarizer import (
@@ -46,6 +46,7 @@ class TranscriptApp:
 
         # Load persisted settings and expose as tk vars (shared across all tabs)
         _s = load_settings()
+        self.engine_var = tk.StringVar(value=_s.get("engine", "faster-whisper"))
         self.model_var = tk.StringVar(value=_s["model"])
         self.device_pref_var = tk.StringVar(value=_s["device"])
         self.llm_url_var = tk.StringVar(value=_s["llm_url"])
@@ -359,6 +360,12 @@ class TranscriptApp:
         ttk.Separator(content).grid(row=r, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         r += 1
 
+        ttk.Label(content, text="Engine:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
+        ttk.Combobox(
+            content, textvariable=self.engine_var, values=ENGINE_OPTIONS, state="readonly", width=24
+        ).grid(row=r, column=1, sticky="w")
+        r += 1
+
         ttk.Label(content, text="Whisper model:").grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
         ttk.Combobox(
             content, textvariable=self.model_var, values=MODEL_OPTIONS, state="readonly", width=24
@@ -574,6 +581,7 @@ class TranscriptApp:
 
         save_settings(
             {
+                "engine": self.engine_var.get(),
                 "model": self.model_var.get(),
                 "device": self.device_pref_var.get(),
                 "llm_url": self.llm_url_var.get().strip(),
@@ -762,6 +770,7 @@ class TranscriptApp:
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
                         output_dir=output_dir,
+                        engine=self.engine_var.get(),
                     )
                 except BaseException as exc:
                     if stop_event.is_set():
@@ -793,6 +802,7 @@ class TranscriptApp:
                         diarize=self.diarize_var.get(),
                         hf_token=self.hf_token_var.get().strip(),
                         output_dir=output_dir,
+                        engine=self.engine_var.get(),
                     )
                 except BaseException as exc:
                     logger.log("Error during transcription:")

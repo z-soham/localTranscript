@@ -12,6 +12,7 @@ dependencies = [
     "tkinterdnd2",
     "yt-dlp",
     "pyannote-audio",
+    "onnx-asr[cpu,hub]",
 ]
 
 [project.scripts]

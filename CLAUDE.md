@@ -13,14 +13,15 @@ No test, lint, or typecheck commands exist in this repo.
 ## Dependencies
 
 ```bash
-pip install .           # core: faster-whisper, tkinterdnd2, yt-dlp, pyannote-audio
+pip install .           # core: faster-whisper, tkinterdnd2, yt-dlp, pyannote-audio, onnx-asr
 ```
 
 - `faster-whisper` — required for transcription (CTranslate2 under the hood)
 - `tkinterdnd2` — optional, drag-and-drop file input
 - `yt-dlp` — optional, YouTube URL audio download (requires FFmpeg for MP3 conversion)
 - `pyannote-audio` — optional, multi-speaker diarization (requires a HuggingFace token; video files need FFmpeg WAV conversion first)
-- `ffprobe`/`ffmpeg` (system-level, not pip) — optional, used for media duration/ETA and required by YouTube download + diarization of video files
+- `onnx-asr` (`onnx-asr[cpu,hub]`) — optional, alternative "Parakeet" ASR engine (NVIDIA Parakeet TDT via ONNX Runtime); faster than faster-whisper on CPU, English-only
+- `ffprobe`/`ffmpeg` (system-level, not pip) — optional, used for media duration/ETA and required by YouTube download, diarization of video files, and the Parakeet engine (any non-WAV input)
 
 Code uses `X | Y` union syntax, which requires **Python 3.10+** despite `pyproject.toml` declaring `>=3.9`.
 
@@ -35,6 +36,7 @@ src/
 ├── settings_manager.py # load_settings/save_settings — JSON persistence at ~/LocalTranscriptLogs/settings.json
 ├── summarizer.py        # summarize_transcript() — LLM summarisation via any OpenAI-compatible endpoint, stdlib urllib only
 ├── diarizer.py          # run_diarization() — speaker diarization via pyannote.audio (optional dependency)
+├── parakeet.py          # transcribe_with_parakeet() — alternative ASR engine via onnx-asr (optional dependency)
 ├── youtube.py           # download_youtube_audio(), YT_DLP_AVAILABLE — requires yt-dlp + FFmpeg
 ├── filebrowser.py       # in-app file/folder browser widget, used only by gui.py
 └── gui.py               # TranscriptApp, build_root, main()
@@ -44,10 +46,13 @@ main.py                  # entry point — sets KMP_DUPLICATE_LIB_OK, enables fa
 Import graph is strictly one-way, no cycles:
 
 ```
-constants → logging_setup → {cuda, settings_manager, utils, diarizer, youtube}
+constants → logging_setup → {cuda, settings_manager, youtube}
+utils (stdlib-only, no internal deps)
+diarizer imports utils (convert_to_wav16k_mono) — not circular, utils has no deps
+parakeet imports constants, logging_setup, utils
 summarizer (stdlib-only, no internal deps)
 settings_manager imports summarizer (for default prompt/system-message constants — not circular)
-transcriber (imports constants, cuda, diarizer, logging_setup, utils)
+transcriber (imports constants, cuda, diarizer, logging_setup, parakeet, utils)
 gui (imports everything above, including filebrowser)
 main.py (imports gui)
 ```
@@ -66,7 +71,9 @@ main.py (imports gui)
 
 **Summarizer** (`summarizer.py`) calls any OpenAI-compatible `/chat/completions` endpoint (OpenRouter, Ollama, etc.) using stdlib `urllib` only — no `requests`/`httpx`. Two modes (`Meeting`, `General Video`) each with their own default system message + prompt template, overridable via settings. SRT input has timestamps/sequence numbers stripped before being sent to the LLM.
 
-**Diarization** (`diarizer.py`) is fully optional — gated by `is_available()` checking for `pyannote.audio`. The pipeline is loaded once and cached at module scope. Video files are converted to a temp 16kHz mono WAV via `ffmpeg` first since pyannote can't decode video containers. Speaker turns are matched back to Whisper segments by maximum time-overlap (`_match_segments_to_speakers` in `transcriber.py`).
+**Diarization** (`diarizer.py`) is fully optional — gated by `is_available()` checking for `pyannote.audio`. The pipeline is loaded once and cached at module scope. Video files are converted to a temp 16kHz mono WAV via `utils.convert_to_wav16k_mono` first since pyannote can't decode video containers. Speaker turns are matched back to segments by maximum time-overlap (`_match_segments_to_speakers` in `transcriber.py`).
+
+**Parakeet engine** (`parakeet.py`) is a second, fully optional ASR engine — gated by `is_available()` checking for `onnx_asr`, selected via the `engine` setting (`"faster-whisper"` default, or `"parakeet"`). Input is normalized to 16kHz mono WAV via `utils.convert_to_wav16k_mono`, loaded as a float32 array with stdlib `wave`, and split into fixed 30s chunks (progress checkpoints only — `onnx-asr` runs its own internal VAD, so chunk boundaries aren't correctness-sensitive). Each chunk is transcribed with `model.recognize(...)` and wrapped into a `Segment(start, end, text)` namedtuple matching the shape `write_txt`/`write_srt`/`_match_segments_to_speakers` already expect. `onnxruntime` does not raise when a requested execution provider (e.g. CUDA) is unavailable — it silently falls back — so CUDA availability is checked upfront via `onnxruntime.get_available_providers()` rather than via try/except. `_model_cache` in `parakeet.py` mirrors `transcriber._cuda_model_cache`'s "never explicitly unload a CUDA model" precedent. In `transcriber.transcribe_file`, the Parakeet path leaves `model = None` (the `_release_model` cleanup no-ops) and stands in `types.SimpleNamespace(language="en", language_probability=1.0)` for `info` so the shared language-log line stays branch-free.
 
 **Output files** are written alongside the input (or to the configured output directory): `<name>_transcript.txt` (plain text) and `<name>_subtitles.srt` (timed subtitles), both prefixed with speaker labels when diarization is enabled.
 
@@ -74,7 +81,9 @@ main.py (imports gui)
 
 ## Model options
 
-`medium`, `large-v3` (selectable in UI). CUDA uses `float16`; CPU uses `int8`.
+Engine: `faster-whisper` (default) or `parakeet`, selectable in UI (`ENGINE_OPTIONS`).
+
+`faster-whisper` models: `medium`, `large-v3` (selectable in UI). CUDA uses `float16`; CPU uses `int8`. The Whisper model choice is ignored when engine is `parakeet` — that engine always uses `nemo-parakeet-tdt-0.6b-v3` (`PARAKEET_MODEL_ID`).
 
 ## Supported media formats
 

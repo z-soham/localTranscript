@@ -2,6 +2,7 @@ import gc
 import threading
 import time
 import traceback
+import types
 from pathlib import Path
 
 try:
@@ -13,6 +14,7 @@ from src.constants import SUPPORTED_EXTENSIONS
 from src.cuda import locate_cudnn_hint, preload_cuda_paths, should_force_cpu_after_cuda_error
 from src.diarizer import is_available as diarization_available, run_diarization
 from src.logging_setup import QueueLogger, TranscriptionError
+from src.parakeet import is_available as parakeet_available, transcribe_with_parakeet
 from src.utils import get_media_duration_seconds, seconds_to_human, write_srt, write_txt
 
 
@@ -60,8 +62,14 @@ def transcribe_file(
     diarize: bool = False,
     hf_token: str = "",
     output_dir: Path | None = None,
+    engine: str = "faster-whisper",
 ) -> None:
-    if WhisperModel is None:
+    if engine == "parakeet":
+        if not parakeet_available():
+            raise TranscriptionError(
+                'onnx-asr is not installed. Run: pip install "onnx-asr[cpu,hub]"'
+            )
+    elif WhisperModel is None:
         raise TranscriptionError(
             "faster-whisper is not installed. Run: pip install faster-whisper"
         )
@@ -77,101 +85,59 @@ def transcribe_file(
 
     model = None
     device_used = None
-
-    if prefer_cuda:
-        preload_cuda_paths(logger)
-        try:
-            if model_name in _cuda_model_cache:
-                model = _cuda_model_cache[model_name]
-                device_used = "cuda"
-                logger.log(f"Reusing cached model '{model_name}' on CUDA.")
-            else:
-                logger.log(f"Loading model '{model_name}' on CUDA...")
-                model = WhisperModel(model_name, device="cuda", compute_type="float16")
-                _cuda_model_cache[model_name] = model
-                device_used = "cuda"
-        except BaseException as e:
-            error_text = str(e)
-            logger.log(f"CUDA load failed: {error_text}")
-            cudnn_hint = locate_cudnn_hint()
-            if "cudnn_ops64_9.dll" in error_text or "Cannot load symbol cudnn" in error_text:
-                logger.log("cuDNN 9 appears to be missing from PATH for the current environment.")
-                if cudnn_hint:
-                    logger.log(f"Possible cuDNN bin directory detected at: {cudnn_hint}")
-                    logger.log(
-                        "The app will continue on CPU. To restore GPU support, "
-                        "add that directory to PATH before launching Python."
-                    )
-            if should_force_cpu_after_cuda_error(error_text):
-                logger.log("Recoverable CUDA startup failure detected. Disabling GPU for this run and falling back to CPU.")
-            else:
-                logger.log("Unexpected CUDA startup failure detected. The app will still attempt CPU fallback.")
-            model = None
-            device_used = None
-            logger.log("Falling back to CPU...")
-
-    if model is None:
-        try:
-            logger.log(f"Loading model '{model_name}' on CPU...")
-            model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            device_used = "cpu"
-        except Exception as e:
-            raise TranscriptionError(f"CPU transcription engine could not be initialized: {e}") from e
-
-    logger.log(f"Device in use: {device_used}")
-    logger.log(f"Transcribing: {input_path}")
-
-    segments_generator, info = model.transcribe(
-        str(input_path),
-        beam_size=5,
-        vad_filter=True,
-        language="en",
-        condition_on_previous_text=True,
-    )
-
-    def _iterate_segments(gen) -> bool:
-        """Iterate a segments generator, updating progress. Returns True if cancelled."""
-        nonlocal segments, last_end, cancelled
-        segments = []
-        last_end = 0.0
-        cancelled = False
-        for segment in gen:
-            if stop_event is not None and stop_event.is_set():
-                cancelled = True
-                break
-            segments.append(segment)
-            last_end = max(last_end, float(segment.end))
-            elapsed = time.time() - start_time
-            if duration_seconds and duration_seconds > 0:
-                progress = max(0.0, min(1.0, last_end / duration_seconds))
-                speed_x = (last_end / elapsed) if elapsed > 0 else None
-                remaining_audio = max(0.0, duration_seconds - last_end)
-                eta = (remaining_audio / speed_x) if speed_x and speed_x > 0 else None
-                logger.progress(progress, last_end, duration_seconds, elapsed, eta, speed_x)
-            else:
-                logger.progress(0.0, last_end, None, elapsed, None, None)
-        return cancelled
-
     segments = []
-    start_time = time.time()
-    last_end = 0.0
     cancelled = False
+    start_time = time.time()
 
-    try:
-        cancelled = _iterate_segments(segments_generator)
-    except Exception as e:
-        is_cuda_oom = device_used == "cuda" and "out of memory" in str(e).lower()
-        if not is_cuda_oom:
-            raise
-        logger.log("CUDA out of memory during transcription.")
-        logger.log("Freeing GPU memory and retrying on CPU...")
-        _release_model(model, device_used, logger)
-        model = None
+    if engine == "parakeet":
+        segments = transcribe_with_parakeet(input_path, prefer_cuda, logger, stop_event, duration_seconds)
+        cancelled = segments is None
+        segments = segments or []
+        info = types.SimpleNamespace(language="en", language_probability=1.0)
+    else:
+        if prefer_cuda:
+            preload_cuda_paths(logger)
+            try:
+                if model_name in _cuda_model_cache:
+                    model = _cuda_model_cache[model_name]
+                    device_used = "cuda"
+                    logger.log(f"Reusing cached model '{model_name}' on CUDA.")
+                else:
+                    logger.log(f"Loading model '{model_name}' on CUDA...")
+                    model = WhisperModel(model_name, device="cuda", compute_type="float16")
+                    _cuda_model_cache[model_name] = model
+                    device_used = "cuda"
+            except BaseException as e:
+                error_text = str(e)
+                logger.log(f"CUDA load failed: {error_text}")
+                cudnn_hint = locate_cudnn_hint()
+                if "cudnn_ops64_9.dll" in error_text or "Cannot load symbol cudnn" in error_text:
+                    logger.log("cuDNN 9 appears to be missing from PATH for the current environment.")
+                    if cudnn_hint:
+                        logger.log(f"Possible cuDNN bin directory detected at: {cudnn_hint}")
+                        logger.log(
+                            "The app will continue on CPU. To restore GPU support, "
+                            "add that directory to PATH before launching Python."
+                        )
+                if should_force_cpu_after_cuda_error(error_text):
+                    logger.log("Recoverable CUDA startup failure detected. Disabling GPU for this run and falling back to CPU.")
+                else:
+                    logger.log("Unexpected CUDA startup failure detected. The app will still attempt CPU fallback.")
+                model = None
+                device_used = None
+                logger.log("Falling back to CPU...")
 
-        logger.log(f"Loading model '{model_name}' on CPU (retry)...")
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
-        device_used = "cpu"
-        logger.log("Retrying transcription on CPU...")
+        if model is None:
+            try:
+                logger.log(f"Loading model '{model_name}' on CPU...")
+                model = WhisperModel(model_name, device="cpu", compute_type="int8")
+                device_used = "cpu"
+            except Exception as e:
+                raise TranscriptionError(f"CPU transcription engine could not be initialized: {e}") from e
+
+        logger.log(f"Device in use: {device_used}")
+        logger.log(f"Transcribing: {input_path}")
+
         segments_generator, info = model.transcribe(
             str(input_path),
             beam_size=5,
@@ -179,8 +145,57 @@ def transcribe_file(
             language="en",
             condition_on_previous_text=True,
         )
+
+        def _iterate_segments(gen) -> bool:
+            """Iterate a segments generator, updating progress. Returns True if cancelled."""
+            nonlocal segments, last_end, cancelled
+            segments = []
+            last_end = 0.0
+            cancelled = False
+            for segment in gen:
+                if stop_event is not None and stop_event.is_set():
+                    cancelled = True
+                    break
+                segments.append(segment)
+                last_end = max(last_end, float(segment.end))
+                elapsed = time.time() - start_time
+                if duration_seconds and duration_seconds > 0:
+                    progress = max(0.0, min(1.0, last_end / duration_seconds))
+                    speed_x = (last_end / elapsed) if elapsed > 0 else None
+                    remaining_audio = max(0.0, duration_seconds - last_end)
+                    eta = (remaining_audio / speed_x) if speed_x and speed_x > 0 else None
+                    logger.progress(progress, last_end, duration_seconds, elapsed, eta, speed_x)
+                else:
+                    logger.progress(0.0, last_end, None, elapsed, None, None)
+            return cancelled
+
         start_time = time.time()
-        cancelled = _iterate_segments(segments_generator)
+        last_end = 0.0
+
+        try:
+            cancelled = _iterate_segments(segments_generator)
+        except Exception as e:
+            is_cuda_oom = device_used == "cuda" and "out of memory" in str(e).lower()
+            if not is_cuda_oom:
+                raise
+            logger.log("CUDA out of memory during transcription.")
+            logger.log("Freeing GPU memory and retrying on CPU...")
+            _release_model(model, device_used, logger)
+            model = None
+
+            logger.log(f"Loading model '{model_name}' on CPU (retry)...")
+            model = WhisperModel(model_name, device="cpu", compute_type="int8")
+            device_used = "cpu"
+            logger.log("Retrying transcription on CPU...")
+            segments_generator, info = model.transcribe(
+                str(input_path),
+                beam_size=5,
+                vad_filter=True,
+                language="en",
+                condition_on_previous_text=True,
+            )
+            start_time = time.time()
+            cancelled = _iterate_segments(segments_generator)
 
     # Write output and signal completion BEFORE releasing the model.
     # The model release (especially CUDA teardown) can trigger a native abort;

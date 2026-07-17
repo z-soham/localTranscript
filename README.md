@@ -7,6 +7,7 @@ A desktop application for transcribing local audio and video files entirely offl
 - Transcribes MP4, MKV, MOV, AVI, WebM, MP3, WAV, M4A, and FLAC files
 - Outputs a plain-text transcript (`_transcript.txt`) and a timed subtitle file (`_subtitles.srt`) alongside the source file
 - **Multi-speaker diarization** — labels each segment with who is speaking (`SPEAKER_00`, `SPEAKER_01`, …) using [pyannote.audio](https://github.com/pyannote/pyannote-audio) _(optional)_
+- **Parakeet engine** — alternative English-only ASR engine via [onnx-asr](https://github.com/istupakov/onnx-asr) (NVIDIA Parakeet TDT), much faster than faster-whisper on CPU _(optional)_
 - GPU acceleration via CUDA with automatic fallback to CPU
 - Real-time progress bar showing percentage, elapsed time, ETA, and transcription speed
 - Stop button to cancel an in-progress transcription
@@ -23,6 +24,7 @@ A desktop application for transcribing local audio and video files entirely offl
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) _(optional — enables YouTube URL input)_
 - [FFmpeg](https://ffmpeg.org/) with `ffprobe` on `PATH` _(optional — enables ETA calculation and YouTube audio extraction)_
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio) _(optional — enables speaker diarization)_
+- [onnx-asr](https://github.com/istupakov/onnx-asr) _(optional — enables the Parakeet ASR engine)_
 
 For GPU acceleration, a CUDA-capable GPU with cuDNN 9 installed is required.
 
@@ -72,7 +74,7 @@ local-transcript
 ```
 
 1. Drag a media file onto the drop zone, or click **Browse MP4 / Media**
-2. Select a model (`medium` or `large-v3`) and preferred device (`cuda` or `cpu`)
+2. Select an engine (`faster-whisper` or `parakeet`), and for `faster-whisper` a model (`medium` or `large-v3`) and preferred device (`cuda` or `cpu`)
 3. Click **Start Transcription**
 4. Output files are written to the same folder as the source file
 
@@ -128,6 +130,10 @@ The model is downloaded on first use and cached locally. All subsequent inferenc
 
 Models are downloaded automatically by faster-whisper on first use and cached locally.
 
+### Parakeet engine
+
+Selecting the `parakeet` engine in Settings switches to NVIDIA's Parakeet TDT model via `onnx-asr` (`pip install "onnx-asr[cpu,hub]"`), English-only, fixed model — the Whisper model dropdown is ignored in this mode. It's dramatically faster than faster-whisper on CPU but doesn't support other languages. The model is downloaded from Hugging Face on first use and cached locally.
+
 ## Output files
 
 Given an input file `interview.mp4`, two files are created in the same directory:
@@ -145,6 +151,7 @@ src/
 ├── cuda.py           # Windows CUDA/cuDNN path helpers
 ├── transcriber.py    # Core transcription logic (runs in background thread)
 ├── diarizer.py       # Speaker diarization via pyannote.audio
+├── parakeet.py       # Alternative ASR engine via onnx-asr (NVIDIA Parakeet)
 ├── youtube.py        # YouTube audio download via yt-dlp
 ├── summarizer.py     # AI summarisation via OpenAI-compatible API
 └── gui.py            # Tkinter UI

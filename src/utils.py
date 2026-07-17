@@ -1,6 +1,8 @@
 import math
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -56,6 +58,21 @@ def get_media_duration_seconds(input_file: Path) -> float | None:
         return float(result.stdout.strip())
     except Exception:
         return None
+
+
+def convert_to_wav16k_mono(input_path: Path) -> Path:
+    """Convert any ffmpeg-readable media file to a temp 16kHz mono WAV. Caller must unlink the result."""
+    fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    tmp_wav = Path(tmp_path)
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path), "-ar", "16000", "-ac", "1", str(tmp_wav)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        tmp_wav.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg WAV conversion failed: {result.stderr.decode(errors='replace')}")
+    return tmp_wav
 
 
 def write_txt(output_path: Path, segments, speaker_map: dict[int, str] | None = None) -> None:
