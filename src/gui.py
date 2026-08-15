@@ -1040,6 +1040,7 @@ def _setup_dark_theme(root: tk.Tk) -> None:
     root.option_add("*TCombobox*Listbox.foreground", FG)
     root.option_add("*TCombobox*Listbox.selectBackground", SELECT_BG)
     root.option_add("*TCombobox*Listbox.selectForeground", FG)
+    root.option_add("*TCombobox*Listbox.borderWidth", 0)
 
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -1057,6 +1058,21 @@ def _setup_dark_theme(root: tk.Tk) -> None:
     style.map("TButton",
               background=[("active", "#505050"), ("pressed", "#404040"), ("disabled", BG2)],
               foreground=[("disabled", "#666666")])
+
+    # clam leaves readonly comboboxes with light field/select colours, which hides
+    # the selected value; the popdown frame is a separate ttk element again.
+    style.configure("TCombobox",
+                    fieldbackground=BG2, background=BG3, foreground=FG,
+                    arrowcolor=FG, bordercolor=BORDER,
+                    selectbackground=BG2, selectforeground=FG, padding=(6, 3))
+    style.map("TCombobox",
+              fieldbackground=[("readonly", BG2), ("disabled", BG)],
+              background=[("active", "#505050")],
+              foreground=[("disabled", "#666666")],
+              selectbackground=[("readonly", BG2), ("!focus", BG2)],
+              selectforeground=[("readonly", FG), ("!focus", FG)],
+              arrowcolor=[("disabled", "#666666")])
+    style.configure("ComboboxPopdownFrame", background=BG2, bordercolor=BORDER, relief="solid")
 
     style.configure("TNotebook.Tab",
                     background=BG2, foreground=FG_DIM, padding=(12, 6),
