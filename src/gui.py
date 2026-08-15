@@ -32,6 +32,46 @@ from src.utils import seconds_to_human
 from src.youtube import YT_DLP_AVAILABLE, download_youtube_audio
 
 
+class _BatchLogger(QueueLogger):
+    """A per-file done() ends that file, not the batch — record it and keep going.
+
+    The single real ("done", ...) for the whole run is put on the queue by the
+    batch loop itself, so _handle_done still fires exactly once.
+    """
+
+    def __init__(self, out_queue: queue.Queue, logger):
+        super().__init__(out_queue, logger)
+        self.last_success = False
+
+    def done(self, success: bool, message: str) -> None:
+        self.last_success = success
+        self.log(message if success else f"FAILED: {message}")
+
+
+def _transcribe_one(item: str, logger: QueueLogger, stop_event: threading.Event, opts: dict) -> None:
+    """Transcribe one queue item: a YouTube URL (download, transcribe, unlink) or a local path."""
+    if not TranscriptApp._is_youtube_url(item):
+        transcribe_file(Path(item), logger=logger, stop_event=stop_event, **opts)
+        return
+
+    downloaded_path: Path | None = None
+    try:
+        downloaded_path = download_youtube_audio(item, logger, stop_event)
+        if stop_event.is_set():
+            logger.log("Download complete but stop was requested — skipping transcription.")
+            logger.done(False, "cancelled")
+            return
+        logger.log(f"Starting transcription: {downloaded_path.name}")
+        transcribe_file(downloaded_path, logger=logger, stop_event=stop_event, **opts)
+    finally:
+        if downloaded_path is not None and downloaded_path.exists():
+            try:
+                downloaded_path.unlink()
+                logger.log(f"Cleaned up temporary file: {downloaded_path.name}")
+            except OSError as e:
+                logger.log(f"Warning: could not delete temp file: {e}")
+
+
 class TranscriptApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -65,11 +105,15 @@ class TranscriptApp:
         self.file_path_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
         self.progress_text_var = tk.StringVar(value="No active transcription")
+        self.queue_count_var = tk.StringVar(value="Queue (0)")
+        self._batch_prefix = ""
 
         # Summarisation-tab state
         self.summary_file_var = tk.StringVar()
         self.summary_mode_var = tk.StringVar(value=SUMMARY_MODES[0])
         self.summary_status_var = tk.StringVar(value="Ready")
+        self.summary_queue_count_var = tk.StringVar(value="Queue (0)")
+        self.summary_thread: threading.Thread | None = None
 
         self._build_ui()
         self._poll_queue()
@@ -162,6 +206,28 @@ class TranscriptApp:
         )
         self.input_hint_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
+        # --- Queue ---
+        ttk.Label(file_frame, textvariable=self.queue_count_var).grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(10, 2)
+        )
+
+        self.queue_list = tk.Listbox(
+            file_frame, selectmode="extended", height=5,
+            bg="#0f0f0f", fg="#d8d8d8", selectbackground="#264f78", selectforeground="#e0e0e0",
+            highlightthickness=0, activestyle="none",
+        )
+        self.queue_list.grid(row=4, column=0, columnspan=2, sticky="ew")
+
+        q_scroll = ttk.Scrollbar(file_frame, orient="vertical", command=self.queue_list.yview)
+        q_scroll.grid(row=4, column=2, sticky="ns", padx=(0, 8))
+        self.queue_list.configure(yscrollcommand=q_scroll.set)
+
+        q_btns = ttk.Frame(file_frame)
+        q_btns.grid(row=4, column=3, sticky="n")
+        ttk.Button(q_btns, text="Add", width=10, command=self._flush_entry_to_queue).grid(row=0, column=0, pady=(0, 4))
+        ttk.Button(q_btns, text="Remove", width=10, command=self._remove_queue_selection).grid(row=1, column=0, pady=(0, 4))
+        ttk.Button(q_btns, text="Clear All", width=10, command=self._clear_queue).grid(row=2, column=0)
+
         # --- Buttons ---
         btn_frame = ttk.Frame(tab)
         btn_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -242,6 +308,31 @@ class TranscriptApp:
             row=1, column=1, padx=(0, 8)
         )
         ttk.Button(file_frame, text="Clear", command=lambda: self.summary_file_var.set("")).grid(row=1, column=2)
+
+        # --- Queue ---
+        ttk.Label(file_frame, textvariable=self.summary_queue_count_var).grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(10, 2)
+        )
+
+        self.summary_queue_list = tk.Listbox(
+            file_frame, selectmode="extended", height=5,
+            bg="#0f0f0f", fg="#d8d8d8", selectbackground="#264f78", selectforeground="#e0e0e0",
+            highlightthickness=0, activestyle="none",
+        )
+        self.summary_queue_list.grid(row=3, column=0, sticky="ew")
+
+        sq_scroll = ttk.Scrollbar(file_frame, orient="vertical", command=self.summary_queue_list.yview)
+        sq_scroll.grid(row=3, column=1, sticky="nsw", padx=(0, 8))
+        self.summary_queue_list.configure(yscrollcommand=sq_scroll.set)
+
+        sq_btns = ttk.Frame(file_frame)
+        sq_btns.grid(row=3, column=2, sticky="n")
+        ttk.Button(sq_btns, text="Add", width=10,
+                   command=lambda: self._flush_entry_to_queue(summary=True)).grid(row=0, column=0, pady=(0, 4))
+        ttk.Button(sq_btns, text="Remove", width=10,
+                   command=lambda: self._remove_queue_selection(summary=True)).grid(row=1, column=0, pady=(0, 4))
+        ttk.Button(sq_btns, text="Clear All", width=10,
+                   command=lambda: self._clear_queue(summary=True)).grid(row=2, column=0)
 
         # --- Active LLM config (read-only display) ---
         cfg_frame = ttk.LabelFrame(tab, text="LLM Configuration  (edit in Settings tab)", padding=10)
@@ -615,12 +706,12 @@ class TranscriptApp:
 
     def _drop_zone_text(self) -> str:
         if DND_AVAILABLE:
-            return "Drag and drop an audio or video file here\n(MP4, MKV, MP3, WAV, M4A, FLAC, and more)\n(or use Browse Media below, or paste a YouTube URL)"
+            return "Drag and drop one or more audio/video files here\n(MP4, MKV, MP3, WAV, M4A, FLAC, and more)\n(or use Browse Media below, or paste a YouTube URL)"
         return "Browse Media below — supports MP4, MKV, MP3, WAV, M4A, FLAC, and more\n(Paste a YouTube URL or install tkinterdnd2 to enable drag-and-drop)"
 
     def _summary_drop_zone_text(self) -> str:
         if DND_AVAILABLE:
-            return "Drag and drop a transcript file here\n(.txt or .srt)\n(or use Browse Transcript below)"
+            return "Drag and drop one or more transcript files here\n(.txt or .srt)\n(or use Browse Transcript below)"
         return "Browse Transcript below — supports .txt and .srt files\n(Install tkinterdnd2 to enable drag-and-drop)"
 
     def _log(self, message: str) -> None:
@@ -649,10 +740,9 @@ class TranscriptApp:
             ],
             initial_dir=self._browser_last_dir,
         )
-        if dialog.result:
-            self.file_path_var.set(dialog.result)
-            self._browser_last_dir = str(Path(dialog.result).parent)
-            self._log(f"Selected file: {dialog.result}")
+        if dialog.results:
+            self._add_queue_items(dialog.results)
+            self._browser_last_dir = str(Path(dialog.results[0]).parent)
 
     def _browse_output_dir(self) -> None:
         chosen = filedialog.askdirectory(
@@ -663,9 +753,10 @@ class TranscriptApp:
 
     def clear_file(self) -> None:
         self.file_path_var.set("")
+        self._clear_queue()
         self.progress["value"] = 0
         self.progress_text_var.set("No active transcription")
-        self._log("Cleared selected file.")
+        self._log("Cleared input and queue.")
 
     def _on_input_key(self, _event=None) -> None:
         text = self.file_path_var.get().strip()
@@ -680,20 +771,63 @@ class TranscriptApp:
             cleaned = cleaned[1:-1]
         return cleaned
 
+    # ------------------------------------------------------------------
+    # Batch queue (shared by both tabs; `summary` picks which one)
+    # ------------------------------------------------------------------
+
+    def _queue_widgets(self, summary: bool):
+        if summary:
+            return self.summary_queue_list, self.summary_queue_count_var, self.summary_file_var
+        return self.queue_list, self.queue_count_var, self.file_path_var
+
+    def _add_queue_items(self, items, summary: bool = False) -> int:
+        listbox, count_var, _ = self._queue_widgets(summary)
+        existing = set(listbox.get(0, "end"))
+        added = 0
+        for raw in items:
+            item = self._normalize_drop_path(raw)
+            if not item or item in existing:
+                continue
+            listbox.insert("end", item)
+            existing.add(item)
+            added += 1
+        count_var.set(f"Queue ({listbox.size()})")
+        if added and not summary:
+            self._log(f"Queued {added} item(s); {listbox.size()} in queue.")
+        return added
+
+    def _flush_entry_to_queue(self, summary: bool = False) -> None:
+        _, _, entry_var = self._queue_widgets(summary)
+        text = entry_var.get().strip()
+        if text and self._add_queue_items([text], summary):
+            entry_var.set("")
+
+    def _remove_queue_selection(self, summary: bool = False) -> None:
+        listbox, count_var, _ = self._queue_widgets(summary)
+        for index in reversed(listbox.curselection()):
+            listbox.delete(index)
+        count_var.set(f"Queue ({listbox.size()})")
+
+    def _clear_queue(self, summary: bool = False) -> None:
+        listbox, count_var, _ = self._queue_widgets(summary)
+        listbox.delete(0, "end")
+        count_var.set("Queue (0)")
+
+    def _collect_queue(self, summary: bool = False) -> list[str]:
+        """Fold any text left in the entry box into the queue, then return it."""
+        self._flush_entry_to_queue(summary)
+        listbox, _, _ = self._queue_widgets(summary)
+        return list(listbox.get(0, "end"))
+
     def _on_drop(self, event) -> None:
         if not event.data:
             return
-        paths = self.root.tk.splitlist(event.data)
-        if paths:
-            self.file_path_var.set(self._normalize_drop_path(paths[0]))
-            self._log(f"Dropped file: {paths[0]}")
+        self._add_queue_items(self.root.tk.splitlist(event.data))
 
     def _on_summary_drop(self, event) -> None:
         if not event.data:
             return
-        paths = self.root.tk.splitlist(event.data)
-        if paths:
-            self.summary_file_var.set(self._normalize_drop_path(paths[0]))
+        self._add_queue_items(self.root.tk.splitlist(event.data), summary=True)
 
     def open_output_folder(self) -> None:
         folder = Path(self.output_dir_var.get())
@@ -710,110 +844,105 @@ class TranscriptApp:
         self.status_var.set("Stopping...")
         self._log("Stop requested — waiting for current segment to finish...")
 
+    def _validate_queue(self, items: list[str]) -> list[str]:
+        """Drop items that cannot possibly run, logging why. Returns what survives."""
+        valid = []
+        for item in items:
+            if self._is_youtube_url(item):
+                if YT_DLP_AVAILABLE:
+                    valid.append(item)
+                else:
+                    self._log(f"Skipping (yt-dlp not installed): {item}")
+            elif Path(item).exists():
+                valid.append(item)
+            else:
+                self._log(f"Skipping (file not found): {item}")
+
+        # ponytail: output names come from the input stem only (transcriber.py), so
+        # same-named inputs from different folders overwrite. Warn rather than rename.
+        stems = [Path(i).stem for i in valid if not self._is_youtube_url(i)]
+        dupes = {s for s in stems if stems.count(s) > 1}
+        if dupes:
+            self._log(f"Warning: duplicate filenames will overwrite each other's output: {', '.join(sorted(dupes))}")
+
+        return valid
+
     def start_transcription(self) -> None:
         if self.worker_thread and self.worker_thread.is_alive():
             _show_dialog(self.root, APP_TITLE, "A transcription is already running.")
             return
 
-        raw_input = self.file_path_var.get().strip()
-
-        if not raw_input:
-            _show_dialog(self.root, APP_TITLE, "Please select a media file or enter a YouTube URL first.", "warning")
+        items = self._collect_queue()
+        if not items:
+            _show_dialog(self.root, APP_TITLE, "Please queue at least one media file or YouTube URL first.", "warning")
             return
 
-        use_youtube = self._is_youtube_url(raw_input)
-
-        if use_youtube and not YT_DLP_AVAILABLE:
-            _show_dialog(self.root, APP_TITLE, "yt-dlp is not installed.\nRun: pip install yt-dlp", "error")
+        items = self._validate_queue(items)
+        if not items:
+            _show_dialog(self.root, APP_TITLE, "None of the queued items can be transcribed.\nSee the log for details.", "error")
             return
-
-        if not use_youtube:
-            input_path = Path(raw_input)
-            if not input_path.exists():
-                _show_dialog(self.root, APP_TITLE, f"File not found:\n{input_path}", "error")
-                return
 
         self._stop_event.clear()
         self.progress["value"] = 0
         self.progress_text_var.set("Starting...")
+        self._batch_prefix = ""
         self._set_busy(True)
 
         # CTranslate2 on Windows can fire spurious SIGINT during long compute runs.
         # Suppress it for the lifetime of the worker; _handle_done restores it.
         self._saved_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+        # Freeze every setting here — Tk vars must not be read from the worker thread.
         model_name = self.model_var.get().strip() or "large-v3"
         prefer_cuda = self.device_pref_var.get().strip().lower() == "cuda"
-        output_dir = Path(self.output_dir_var.get())
+        engine = self.engine_var.get()
+        opts = {
+            "model_name": model_name,
+            "prefer_cuda": prefer_cuda,
+            "engine": engine,
+            "diarize": self.diarize_var.get(),
+            "hf_token": self.hf_token_var.get().strip(),
+            "output_dir": Path(self.output_dir_var.get()),
+        }
 
+        engine_label = "parakeet" if engine == "parakeet" else model_name
         self._log("=" * 72)
+        self._log(f"Starting batch of {len(items)} item(s).")
+        self._log(f"Model: {engine_label} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
 
-        logger = QueueLogger(self.queue, LOGGER)
+        logger = _BatchLogger(self.queue, LOGGER)
         stop_event = self._stop_event
+        total = len(items)
 
-        if use_youtube:
-            url = raw_input
-            self._log(f"YouTube URL: {url}")
-            engine = self.engine_var.get()
-            engine_label = "parakeet" if engine == "parakeet" else model_name
-            self._log(f"Model: {engine_label} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
-
-            def worker() -> None:
-                downloaded_path: Path | None = None
+        def worker() -> None:
+            ok = 0
+            for index, item in enumerate(items, 1):
+                if stop_event.is_set():
+                    break
+                self.queue.put(("batch", {"index": index, "total": total, "name": Path(item).name}))
+                logger.log("-" * 72)
+                logger.log(f"[{index}/{total}] {item}")
+                logger.last_success = False
                 try:
-                    downloaded_path = download_youtube_audio(url, logger, stop_event)
-                    if stop_event.is_set():
-                        logger.log("Download complete but stop was requested — skipping transcription.")
-                        logger.done(False, "cancelled")
-                        return
-                    logger.log(f"Starting transcription: {downloaded_path.name}")
-                    transcribe_file(
-                        downloaded_path, model_name, prefer_cuda, logger, stop_event,
-                        diarize=self.diarize_var.get(),
-                        hf_token=self.hf_token_var.get().strip(),
-                        output_dir=output_dir,
-                        engine=self.engine_var.get(),
-                    )
-                except BaseException as exc:
+                    _transcribe_one(item, logger, stop_event, opts)
+                except BaseException as exc:  # one bad item must not kill the rest of the batch
                     if stop_event.is_set():
                         logger.log("Cancelled.")
-                        logger.done(False, "cancelled")
-                    else:
-                        logger.log("Error:")
-                        logger.log(str(exc))
-                        logger.log(traceback.format_exc())
-                        LOGGER.exception("Unhandled YouTube/transcription failure")
-                        logger.done(False, f"{exc}\nLog file: {SESSION_LOG_PATH}")
-                finally:
-                    if downloaded_path is not None and downloaded_path.exists():
-                        try:
-                            downloaded_path.unlink()
-                            logger.log(f"Cleaned up temporary file: {downloaded_path.name}")
-                        except OSError as e:
-                            logger.log(f"Warning: could not delete temp file: {e}")
-
-        else:
-            input_path = Path(raw_input)
-            self._log(f"Starting transcription: {input_path}")
-            engine = self.engine_var.get()
-            engine_label = "parakeet" if engine == "parakeet" else model_name
-            self._log(f"Model: {engine_label} | Device: {'CUDA' if prefer_cuda else 'CPU'}")
-
-            def worker() -> None:  # type: ignore[misc]
-                try:
-                    transcribe_file(
-                        input_path, model_name, prefer_cuda, logger, stop_event,
-                        diarize=self.diarize_var.get(),
-                        hf_token=self.hf_token_var.get().strip(),
-                        output_dir=output_dir,
-                        engine=self.engine_var.get(),
-                    )
-                except BaseException as exc:
-                    logger.log("Error during transcription:")
+                        break
+                    logger.log(f"Error on {item}:")
                     logger.log(str(exc))
                     logger.log(traceback.format_exc())
                     LOGGER.exception("Unhandled transcription failure")
-                    logger.done(False, f"{exc}\nLog file: {SESSION_LOG_PATH}")
+                ok += logger.last_success
+
+            if stop_event.is_set():
+                self.queue.put(("done", {"success": False, "message": "cancelled"}))
+            else:
+                self.queue.put(("done", {
+                    "success": ok == total,
+                    "message": f"{ok}/{total} item(s) transcribed successfully."
+                             + ("" if ok == total else f"\nLog file: {SESSION_LOG_PATH}"),
+                }))
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -826,6 +955,11 @@ class TranscriptApp:
                     self._log(payload)
                 elif item_type == "progress":
                     self._handle_progress(payload)
+                elif item_type == "batch":
+                    self._batch_prefix = (
+                        "" if payload["total"] == 1
+                        else f"[{payload['index']}/{payload['total']}] {payload['name']} | "
+                    )
                 elif item_type == "done":
                     self._handle_done(payload)
         except queue.Empty:
@@ -845,12 +979,14 @@ class TranscriptApp:
             self.progress["value"] = progress * 100
             speed_text = f"{speed_x:.2f}x" if speed_x else "--"
             self.progress_text_var.set(
-                f"{progress * 100:6.2f}% | Audio {seconds_to_human(processed)} / {seconds_to_human(total)} | "
+                f"{self._batch_prefix}{progress * 100:6.2f}% | "
+                f"Audio {seconds_to_human(processed)} / {seconds_to_human(total)} | "
                 f"Elapsed {seconds_to_human(elapsed)} | ETA {seconds_to_human(eta)} | Speed {speed_text}"
             )
         else:
             self.progress_text_var.set(
-                f"Processed audio {seconds_to_human(processed)} | Elapsed {seconds_to_human(elapsed)}"
+                f"{self._batch_prefix}Processed audio {seconds_to_human(processed)} | "
+                f"Elapsed {seconds_to_human(elapsed)}"
             )
 
     def _handle_done(self, payload: dict) -> None:
@@ -891,19 +1027,25 @@ class TranscriptApp:
             ],
             initial_dir=self._browser_last_dir,
         )
-        if dialog.result:
-            self.summary_file_var.set(dialog.result)
-            self._browser_last_dir = str(Path(dialog.result).parent)
+        if dialog.results:
+            self._add_queue_items(dialog.results, summary=True)
+            self._browser_last_dir = str(Path(dialog.results[0]).parent)
 
     def start_summarisation(self) -> None:
-        raw = self.summary_file_var.get().strip()
-        if not raw:
-            _show_dialog(self.root, APP_TITLE, "Please select a transcript file first.", "warning")
+        if self.summary_thread and self.summary_thread.is_alive():
+            _show_dialog(self.root, APP_TITLE, "A summarisation is already running.")
             return
 
-        input_path = Path(raw)
-        if not input_path.exists():
-            _show_dialog(self.root, APP_TITLE, f"File not found:\n{input_path}", "error")
+        items = self._collect_queue(summary=True)
+        if not items:
+            _show_dialog(self.root, APP_TITLE, "Please queue at least one transcript file first.", "warning")
+            return
+
+        paths = [Path(i) for i in items]
+        missing = [p for p in paths if not p.exists()]
+        paths = [p for p in paths if p.exists()]
+        if not paths:
+            _show_dialog(self.root, APP_TITLE, "None of the queued transcripts exist.", "error")
             return
 
         llm_url = self.llm_url_var.get().strip()
@@ -927,44 +1069,65 @@ class TranscriptApp:
         self.summary_output.insert("end", "Sending transcript to LLM…")
         self.summary_output.configure(state="disabled")
 
+        total = len(paths) + len(missing)
+        errors = [f"{p.name}: file not found" for p in missing]
+
         def worker() -> None:
-            try:
-                result = summarize_transcript(
-                    input_path, llm_url, api_key, llm_model, mode,
-                    meeting_sys_msg, meeting_p, general_sys_msg, general_p,
+            ok = 0
+            last: str | None = None
+            for index, path in enumerate(paths, 1):
+                self.root.after(
+                    0, lambda i=index, n=path.name: self.summary_status_var.set(f"[{i}/{total}] Summarising {n}…")
                 )
-                self.root.after(0, lambda: self._on_summary_done(result, None))
-            except Exception as exc:
-                err = str(exc)
-                self.root.after(0, lambda: self._on_summary_done(None, err))
+                try:
+                    result = summarize_transcript(
+                        path, llm_url, api_key, llm_model, mode,
+                        meeting_sys_msg, meeting_p, general_sys_msg, general_p,
+                    )
+                    out_path = path.with_name(f"{path.stem}_summary.md")
+                    out_path.write_text(result, encoding="utf-8")
+                    self._last_summary_path = out_path  # plain attribute, no Tk call
+                    last = result
+                    ok += 1
+                except Exception as exc:
+                    errors.append(f"{path.name}: {exc}")
 
-        threading.Thread(target=worker, daemon=True).start()
+            self.root.after(0, lambda: self._on_summary_done(last, errors, ok, total))
 
-    def _on_summary_done(self, result: str | None, error: str | None) -> None:
+        self.summary_thread = threading.Thread(target=worker, daemon=True)
+        self.summary_thread.start()
+
+    def _on_summary_done(self, result: str | None, errors: list[str], ok: int, total: int) -> None:
         self.summarise_btn.configure(state="normal")
         self.summary_output.configure(state="normal")
         self.summary_output.delete("1.0", "end")
 
-        if error:
-            self.summary_status_var.set("Summarisation failed.")
-            self.summary_output.insert("end", f"Error:\n{error}")
-            _show_dialog(self.root, APP_TITLE, f"Summarisation failed:\n{error}", "error")
-        else:
-            self.summary_status_var.set("Summary generated successfully.")
+        if result:
             self.summary_output.insert("end", result)
             self.save_summary_btn.configure(state="normal")
-
+        if errors:
+            if result:
+                self.summary_output.insert("end", "\n\n" + "-" * 40 + "\n")
+            self.summary_output.insert("end", "Errors:\n" + "\n".join(errors))
         self.summary_output.configure(state="disabled")
+
+        self.summary_status_var.set(
+            f"{ok}/{total} summarised — saved as <name>_summary.md beside each transcript."
+        )
+        if errors:
+            _show_dialog(
+                self.root, APP_TITLE,
+                f"{ok}/{total} summarised.\n\nFailures:\n" + "\n".join(errors),
+                "error",
+            )
 
     def save_summary(self) -> None:
         content = self.summary_output.get("1.0", "end").strip()
         if not content:
             return
 
-        default_name = "summary.md"
-        raw = self.summary_file_var.get().strip()
-        if raw:
-            default_name = Path(raw).stem + "_summary.md"
+        last = getattr(self, "_last_summary_path", None)
+        default_name = last.name if last else "summary.md"
 
         save_path = filedialog.asksaveasfilename(
             title="Save summary",

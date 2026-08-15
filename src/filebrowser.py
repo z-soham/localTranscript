@@ -30,6 +30,7 @@ class FileBrowserDialog:
     ):
         self.parent = parent
         self.result: str | None = None
+        self.results: list[str] = []
         self._allowed_exts: set[str] | None = None
         self._build_ext_filter(filetypes)
 
@@ -111,7 +112,7 @@ class FileBrowserDialog:
         style.map("FileBrowser.Treeview",
                   background=[("selected", "#264f78")],
                   foreground=[("selected", "#e0e0e0")])
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse", style="FileBrowser.Treeview")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended", style="FileBrowser.Treeview")
 
         self.tree.heading("name", text="Name", command=lambda c="name": self._on_header_click(c))
         self.tree.heading("size", text="Size", command=lambda c="size": self._on_header_click(c))
@@ -272,34 +273,36 @@ class FileBrowserDialog:
         if not selection:
             return
         path = Path(selection[0])
-        if path.is_dir():
+        if len(selection) == 1 and path.is_dir():
             self._current_dir = path
             self._path_var.set(str(self._current_dir))
             self._populate()
         else:
-            self._confirm_selection(path)
+            self._on_select()  # keeps the whole multi-selection (also handles <Return>)
 
     # ------------------------------------------------------------------
     # Selection / dismissal
     # ------------------------------------------------------------------
 
     def _on_select(self) -> None:
-        selection = self.tree.selection()
-        if not selection:
-            self._status_label.configure(text="No file selected.")
+        # Tree iids are the full path strings (see _populate).
+        paths = [Path(iid) for iid in self.tree.selection()]
+        files = [p for p in paths if not p.is_dir()]
+        if not files:
+            self._status_label.configure(
+                text="Cannot select a folder." if paths else "No file selected."
+            )
             return
-        path = Path(selection[0])
-        if path.is_dir():
-            self._status_label.configure(text="Cannot select a folder.")
-            return
-        self._confirm_selection(path)
+        self._confirm_selection(files)
 
-    def _confirm_selection(self, path: Path) -> None:
-        self.result = str(path)
+    def _confirm_selection(self, paths: list[Path]) -> None:
+        self.results = [str(p) for p in paths]
+        self.result = self.results[0] if self.results else None
         self.dialog.destroy()
 
     def _on_cancel(self) -> None:
         self.result = None
+        self.results = []
         self.dialog.destroy()
 
 
